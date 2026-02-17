@@ -46,9 +46,15 @@ export default function UsersPage() {
   }, [currentUser, userLoading]);
 
   const fetchUsers = async () => {
-    const { data } = await supabase.from("users").select("*").order("full_name");
-    setUsers(data || []);
-    setLoading(false);
+    try {
+      const { data, error } = await supabase.from("users").select("*").order("full_name");
+      if (error) console.error("Failed to fetch users:", error);
+      setUsers(data || []);
+    } catch (err) {
+      console.error("Users fetch exception:", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { if (currentUser?.role === "admin") fetchUsers(); }, [currentUser]);
@@ -81,43 +87,45 @@ export default function UsersPage() {
 
       if (error) { toast.error(error.message); } else { toast.success("User updated"); }
     } else {
-      // Create new user via Supabase Auth, then add to users table
+      // Create new user via Supabase Auth signUp, then add to users table
       const email = fd.get("email") as string;
       const password = fd.get("password") as string;
+      const fullName = fd.get("full_name") as string;
+      const phone = fd.get("phone") as string || null;
 
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      // Use signUp (works with anon key, unlike admin.createUser which needs service role)
+      const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
-        email_confirm: true,
+        options: {
+          data: { full_name: fullName },
+        },
       });
 
       if (authError) {
-        // Fallback: insert into users table directly (for cases where admin API isn't available)
-        const { error: insertError } = await supabase.from("users").insert({
-          company_id: currentUser?.company_id,
-          full_name: fd.get("full_name") as string,
-          email,
-          phone: fd.get("phone") as string || null,
-          role: selectedRole,
-          is_active: true,
-        });
-
-        if (insertError) { toast.error(insertError.message); setSubmitting(false); return; }
-        toast.success("User profile created (auth account may need separate setup)");
-      } else {
-        // Insert profile
-        const { error } = await supabase.from("users").insert({
-          id: authData.user.id,
-          company_id: currentUser?.company_id,
-          full_name: fd.get("full_name") as string,
-          email,
-          phone: fd.get("phone") as string || null,
-          role: selectedRole,
-          is_active: true,
-        });
-
-        if (error) { toast.error(error.message); } else { toast.success("User created"); }
+        toast.error(authError.message);
+        setSubmitting(false);
+        return;
       }
+
+      if (!authData.user) {
+        toast.error("Failed to create auth account");
+        setSubmitting(false);
+        return;
+      }
+
+      // Insert profile row in users table
+      const { error } = await supabase.from("users").insert({
+        id: authData.user.id,
+        company_id: currentUser?.company_id,
+        full_name: fullName,
+        email,
+        phone,
+        role: selectedRole,
+        is_active: true,
+      });
+
+      if (error) { toast.error(error.message); } else { toast.success("User created successfully"); }
     }
 
     setDialogOpen(false);

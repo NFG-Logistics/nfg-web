@@ -44,15 +44,21 @@ export default function DocumentsPage() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
 
   useEffect(() => {
-    async function fetch() {
-      const { data } = await supabase
-        .from("documents")
-        .select("*, load:load_id(reference_number), uploader:uploaded_by(full_name)")
-        .order("created_at", { ascending: false });
-      setDocuments((data as any) || []);
-      setLoading(false);
+    async function fetchDocs() {
+      try {
+        const { data, error } = await supabase
+          .from("documents")
+          .select("*, load:load_id(reference_number), uploader:uploaded_by(full_name)")
+          .order("created_at", { ascending: false });
+        if (error) console.error("Failed to fetch documents:", error);
+        setDocuments((data as any) || []);
+      } catch (err) {
+        console.error("Documents fetch exception:", err);
+      } finally {
+        setLoading(false);
+      }
     }
-    fetch();
+    fetchDocs();
   }, []);
 
   const filtered = documents.filter((d) => {

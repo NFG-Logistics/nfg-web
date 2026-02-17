@@ -26,9 +26,16 @@ export default function TrucksPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const fetchTrucks = async () => {
-    const { data } = await supabase.from("trucks").select("*").order("truck_number");
-    setTrucks(data || []);
-    setLoading(false);
+    try {
+      const { data, error } = await supabase.from("trucks").select("*").order("truck_number");
+      if (error) { console.error("Failed to fetch trucks:", error); toast.error("Failed to load trucks: " + error.message); }
+      setTrucks(data || []);
+    } catch (err) {
+      console.error("Trucks fetch exception:", err);
+      toast.error("Connection error loading trucks");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchTrucks(); }, []);

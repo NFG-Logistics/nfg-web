@@ -1,31 +1,53 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Package, Truck, CheckCircle2, DollarSign, Users2, FileText, Activity } from "lucide-react";
+import { Package, Truck, CheckCircle2, DollarSign, Users2, FileText, Activity, AlertCircle } from "lucide-react";
 
 export default async function DashboardPage() {
   const supabase = createClient();
 
-  const { data: { user: authUser } } = await supabase.auth.getUser();
-  let userName = authUser?.user_metadata?.full_name?.split(" ")[0];
-  if (!userName && authUser?.id) {
-    const { data: profile } = await supabase.from("users").select("full_name").eq("id", authUser.id).single();
-    userName = profile?.full_name?.split(" ")[0] ?? "there";
+  let userName = "there";
+  let activeLoadCount = 0;
+  let driverCount = 0;
+  let deliveredCount = 0;
+  let totalRevenue = 0;
+  let dbError: string | null = null;
+
+  try {
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (authUser?.id) {
+      const nameFromMeta = authUser.user_metadata?.full_name?.split(" ")[0];
+      if (nameFromMeta) {
+        userName = nameFromMeta;
+      } else {
+        const { data: profile } = await supabase.from("users").select("full_name").eq("id", authUser.id).single();
+        userName = profile?.full_name?.split(" ")[0] ?? "there";
+      }
+    }
+
+    // Fetch KPIs in parallel
+    const [loadsRes, driversRes, deliveredRes, revenueRes] = await Promise.all([
+      supabase.from("loads").select("id", { count: "exact", head: true }).not("status", "in", '("delivered","cancelled")'),
+      supabase.from("users").select("id", { count: "exact", head: true }).eq("role", "driver").eq("is_active", true),
+      supabase.from("loads").select("id", { count: "exact", head: true }).eq("status", "delivered"),
+      supabase.from("loads").select("rate").eq("status", "delivered"),
+    ]);
+
+    // Check for errors
+    const firstError = loadsRes.error || driversRes.error || deliveredRes.error || revenueRes.error;
+    if (firstError) {
+      dbError = firstError.message;
+      console.error("Dashboard KPI error:", firstError);
+    }
+
+    activeLoadCount = loadsRes.count || 0;
+    driverCount = driversRes.count || 0;
+    deliveredCount = deliveredRes.count || 0;
+    totalRevenue = (revenueRes.data || []).reduce((sum, l) => sum + (l.rate || 0), 0);
+  } catch (err) {
+    dbError = (err as Error).message;
+    console.error("Dashboard exception:", err);
   }
-  if (!userName) userName = "there";
-
-  // Fetch KPIs in parallel
-  const [loadsRes, driversRes, deliveredRes, revenueRes] = await Promise.all([
-    supabase.from("loads").select("id", { count: "exact", head: true }).not("status", "in", '("delivered","cancelled")'),
-    supabase.from("users").select("id", { count: "exact", head: true }).eq("role", "driver").eq("is_active", true),
-    supabase.from("loads").select("id", { count: "exact", head: true }).eq("status", "delivered"),
-    supabase.from("loads").select("rate").eq("status", "delivered"),
-  ]);
-
-  const activeLoadCount = loadsRes.count || 0;
-  const driverCount = driversRes.count || 0;
-  const deliveredCount = deliveredRes.count || 0;
-  const totalRevenue = (revenueRes.data || []).reduce((sum, l) => sum + (l.rate || 0), 0);
 
   const kpis = [
     { title: "Active Loads", value: activeLoadCount, icon: Package, color: "text-primary" },
@@ -46,6 +68,22 @@ export default async function DashboardPage() {
         <h1 className="text-2xl font-bold tracking-tight">Welcome back, {userName}!</h1>
         <p className="text-sm text-muted-foreground mt-1">Here&apos;s what&apos;s happening with your logistics operations today.</p>
       </div>
+
+      {/* Database Error Banner */}
+      {dbError && (
+        <Card className="border-destructive bg-destructive/5">
+          <CardContent className="flex items-start gap-3 p-4">
+            <AlertCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-destructive">Database Error</p>
+              <p className="text-sm text-muted-foreground mt-1">{dbError}</p>
+              <p className="text-xs text-muted-foreground mt-2">
+                If this says &quot;querying schema&quot;, run this in the Supabase SQL Editor: <code className="bg-muted px-1 py-0.5 rounded">NOTIFY pgrst, &apos;reload schema&apos;;</code>
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

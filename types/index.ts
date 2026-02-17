@@ -72,6 +72,7 @@ export interface Truck {
   vin?: string;
   license_plate?: string;
   is_active: boolean;
+  in_use: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -84,6 +85,7 @@ export interface Trailer {
   length_ft?: number;
   license_plate?: string;
   is_active: boolean;
+  in_use: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -105,6 +107,9 @@ export interface Load {
   rate: number;
   payment_status: PaymentStatus;
   cancel_reason?: string;
+  review_feedback?: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
   dispatched_at: string;
   completed_at?: string;
   cancelled_at?: string;

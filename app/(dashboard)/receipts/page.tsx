@@ -25,15 +25,21 @@ export default function ReceiptsPage() {
   const [viewReceipt, setViewReceipt] = useState<ReceiptWithLoad | null>(null);
 
   useEffect(() => {
-    async function fetch() {
-      const { data } = await supabase
-        .from("receipts")
-        .select("*, load:load_id(reference_number, status), uploader:uploaded_by(full_name)")
-        .order("created_at", { ascending: false });
-      setReceipts((data as any) || []);
-      setLoading(false);
+    async function fetchReceipts() {
+      try {
+        const { data, error } = await supabase
+          .from("receipts")
+          .select("*, load:load_id(reference_number, status), uploader:uploaded_by(full_name)")
+          .order("created_at", { ascending: false });
+        if (error) console.error("Failed to fetch receipts:", error);
+        setReceipts((data as any) || []);
+      } catch (err) {
+        console.error("Receipts fetch exception:", err);
+      } finally {
+        setLoading(false);
+      }
     }
-    fetch();
+    fetchReceipts();
   }, []);
 
   const filtered = receipts.filter((r) =>

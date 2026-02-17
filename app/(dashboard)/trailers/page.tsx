@@ -26,9 +26,16 @@ export default function TrailersPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const fetchTrailers = async () => {
-    const { data } = await supabase.from("trailers").select("*").order("trailer_number");
-    setTrailers(data || []);
-    setLoading(false);
+    try {
+      const { data, error } = await supabase.from("trailers").select("*").order("trailer_number");
+      if (error) { console.error("Failed to fetch trailers:", error); toast.error("Failed to load trailers: " + error.message); }
+      setTrailers(data || []);
+    } catch (err) {
+      console.error("Trailers fetch exception:", err);
+      toast.error("Connection error loading trailers");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchTrailers(); }, []);

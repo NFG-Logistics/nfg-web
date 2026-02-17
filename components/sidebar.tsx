@@ -9,24 +9,23 @@ import {
   Home,
   Users2,
   Activity,
-  Calendar,
   Package,
   FileText,
   Truck,
   BarChart3,
-  Settings,
 } from "lucide-react";
 
 const navItems = [
   { title: "Dashboard",       href: "/dashboard",       icon: Home,     roles: ["admin", "dispatcher"] },
-  { title: "Drivers",         href: "/drivers",         icon: Users2,   roles: ["admin", "dispatcher"] },
-  { title: "Status Updates",  href: "/status-updates",  icon: Activity, roles: ["admin", "dispatcher"] },
-  { title: "Driver Schedule", href: "/driver-schedule", icon: Calendar, roles: ["admin", "dispatcher"] },
   { title: "Loads",           href: "/loads",           icon: Package,  roles: ["admin", "dispatcher"] },
+  { title: "Status Updates",  href: "/status-updates",  icon: Activity, roles: ["admin", "dispatcher"] },
+  { title: "Drivers",         href: "/drivers",         icon: Users2,   roles: ["admin", "dispatcher"] },
+  { title: "Trucks",          href: "/trucks",          icon: Truck,    roles: ["admin", "dispatcher"] },
+  { title: "Trailers",        href: "/trailers",        icon: Truck,    roles: ["admin", "dispatcher"] },
   { title: "Receipts",        href: "/receipts",        icon: FileText,  roles: ["admin", "dispatcher"] },
-  { title: "Trucks & Trailers", href: "/trucks",      icon: Truck,    roles: ["admin", "dispatcher"] },
-  { title: "Analytics",       href: "/analytics",       icon: BarChart3, roles: ["admin", "dispatcher"] },
-  { title: "Settings",        href: "/settings",        icon: Settings, roles: ["admin", "dispatcher"] },
+  { title: "Documents",       href: "/documents",       icon: FileText,  roles: ["admin", "dispatcher"] },
+  { title: "Reports",         href: "/reports",         icon: BarChart3, roles: ["admin"] },
+  { title: "Users",           href: "/users",           icon: Users2,   roles: ["admin"] },
 ];
 
 export function Sidebar() {

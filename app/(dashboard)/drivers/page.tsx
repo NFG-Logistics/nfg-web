@@ -23,32 +23,41 @@ export default function DriversPage() {
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    async function fetch() {
-      // Fetch all drivers
-      const { data: driverData } = await supabase
-        .from("users")
-        .select("*")
-        .eq("role", "driver")
-        .order("full_name");
+    async function fetchDrivers() {
+      try {
+        // Fetch all drivers
+        const { data: driverData, error: driverErr } = await supabase
+          .from("users")
+          .select("*")
+          .eq("role", "driver")
+          .order("full_name");
 
-      // Fetch active loads to see who's assigned
-      const { data: activeLoads } = await supabase
-        .from("loads")
-        .select("id, reference_number, status, driver_id")
-        .not("status", "in", '("delivered","cancelled")');
+        if (driverErr) console.error("Failed to fetch drivers:", driverErr);
 
-      const driverMap = new Map<string, Load>();
-      (activeLoads || []).forEach((l) => { if (l.driver_id) driverMap.set(l.driver_id, l as Load); });
+        // Fetch active loads to see who's assigned
+        const { data: activeLoads, error: loadsErr } = await supabase
+          .from("loads")
+          .select("id, reference_number, status, driver_id")
+          .not("status", "in", '("delivered","cancelled")');
 
-      const enriched = (driverData || []).map((d) => ({
-        ...d,
-        active_load: driverMap.get(d.id) || null,
-      }));
+        if (loadsErr) console.error("Failed to fetch active loads:", loadsErr);
 
-      setDrivers(enriched);
-      setLoading(false);
+        const driverMap = new Map<string, Load>();
+        (activeLoads || []).forEach((l) => { if (l.driver_id) driverMap.set(l.driver_id, l as Load); });
+
+        const enriched = (driverData || []).map((d) => ({
+          ...d,
+          active_load: driverMap.get(d.id) || null,
+        }));
+
+        setDrivers(enriched);
+      } catch (err) {
+        console.error("Drivers fetch exception:", err);
+      } finally {
+        setLoading(false);
+      }
     }
-    fetch();
+    fetchDrivers();
   }, []);
 
   const filtered = drivers.filter((d) =>
