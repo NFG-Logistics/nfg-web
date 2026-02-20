@@ -26,6 +26,7 @@ export async function middleware(request: NextRequest) {
   );
 
   // IMPORTANT: use getUser() instead of getSession() — it validates with the server
+  // Do NOT fetch profile here — move role validation to layout/server components
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -51,20 +52,8 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Role-based route protection for admin-only pages
-  if (user && (path.startsWith("/reports") || path.startsWith("/users"))) {
-    const { data: profile } = await supabase
-      .from("users")
-      .select("role")
-      .eq("id", user.id)
-      .single();
-
-    if (profile?.role !== "admin") {
-      const url = request.nextUrl.clone();
-      url.pathname = "/dashboard";
-      return NextResponse.redirect(url);
-    }
-  }
+  // Role-based route protection moved to layout/server components
+  // Middleware only checks session existence, not roles
 
   return supabaseResponse;
 }

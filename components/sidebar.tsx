@@ -13,19 +13,18 @@ import {
   FileText,
   Truck,
   BarChart3,
+  Settings,
 } from "lucide-react";
 
 const navItems = [
   { title: "Dashboard",       href: "/dashboard",       icon: Home,     roles: ["admin", "dispatcher"] },
-  { title: "Loads",           href: "/loads",           icon: Package,  roles: ["admin", "dispatcher"] },
-  { title: "Status Updates",  href: "/status-updates",  icon: Activity, roles: ["admin", "dispatcher"] },
   { title: "Drivers",         href: "/drivers",         icon: Users2,   roles: ["admin", "dispatcher"] },
-  { title: "Trucks",          href: "/trucks",          icon: Truck,    roles: ["admin", "dispatcher"] },
-  { title: "Trailers",        href: "/trailers",        icon: Truck,    roles: ["admin", "dispatcher"] },
+  { title: "Status Updates",  href: "/status-updates",  icon: Activity, roles: ["admin", "dispatcher"] },
+  { title: "Loads",           href: "/loads",           icon: Package,  roles: ["admin", "dispatcher"] },
+  { title: "Trucks & Trailers", href: "/fleet",        icon: Truck,    roles: ["admin", "dispatcher"] },
   { title: "Receipts",        href: "/receipts",        icon: FileText,  roles: ["admin", "dispatcher"] },
-  { title: "Documents",       href: "/documents",       icon: FileText,  roles: ["admin", "dispatcher"] },
   { title: "Reports",         href: "/reports",         icon: BarChart3, roles: ["admin"] },
-  { title: "Users",           href: "/users",           icon: Users2,   roles: ["admin"] },
+  { title: "Settings",        href: "/settings",        icon: Settings, roles: ["admin", "dispatcher"] },
 ];
 
 export function Sidebar() {
@@ -61,7 +60,7 @@ export function Sidebar() {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-bold transition-colors",
                   isActive
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"

@@ -1,20 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Truck, Loader2 } from "lucide-react";
+
+const REMEMBER_EMAIL_KEY = "nfg_logistics_remembered_email";
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Load remembered email on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const remembered = localStorage.getItem(REMEMBER_EMAIL_KEY);
+      if (remembered) {
+        setEmail(remembered);
+        setRememberMe(true);
+      }
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,12 +37,25 @@ export default function LoginPage() {
     setLoading(true);
 
     const supabase = createClient();
-    const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+      options: {
+        persistSession: true, // Enable persistent session
+      },
+    });
 
     if (authError) {
       setError(authError.message);
       setLoading(false);
       return;
+    }
+
+    // Store email if Remember Me is checked
+    if (rememberMe && typeof window !== "undefined") {
+      localStorage.setItem(REMEMBER_EMAIL_KEY, email);
+    } else if (!rememberMe && typeof window !== "undefined") {
+      localStorage.removeItem(REMEMBER_EMAIL_KEY);
     }
 
     router.push("/dashboard");
@@ -77,6 +105,20 @@ export default function LoginPage() {
                   required
                   autoComplete="current-password"
                 />
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="remember"
+                  checked={rememberMe}
+                  onCheckedChange={(checked) => setRememberMe(checked === true)}
+                />
+                <Label
+                  htmlFor="remember"
+                  className="text-sm font-normal cursor-pointer"
+                >
+                  Remember me
+                </Label>
               </div>
 
               {error && (

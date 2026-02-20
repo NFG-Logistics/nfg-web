@@ -58,6 +58,7 @@ export interface User {
   phone?: string;
   avatar_url?: string;
   is_active: boolean;
+  availability_status?: "available" | "unavailable" | "in_service";
   created_at: string;
   updated_at: string;
 }
@@ -73,6 +74,9 @@ export interface Truck {
   license_plate?: string;
   is_active: boolean;
   in_use: boolean;
+  maintenance_status?: "available" | "in_service";
+  maintenance_notes?: string;
+  last_service_date?: string;
   created_at: string;
   updated_at: string;
 }
@@ -86,6 +90,9 @@ export interface Trailer {
   license_plate?: string;
   is_active: boolean;
   in_use: boolean;
+  maintenance_status?: "available" | "in_service";
+  maintenance_notes?: string;
+  last_service_date?: string;
   created_at: string;
   updated_at: string;
 }
@@ -161,6 +168,8 @@ export interface Receipt {
   file_type?: string;
   signed_by?: string;
   no_pod_available: boolean;
+  receipt_type?: "fuel" | "road_service" | "toll" | "lumper" | "other";
+  truck_id?: string;
   notes?: string;
   created_at: string;
 }

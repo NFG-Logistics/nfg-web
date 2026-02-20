@@ -251,6 +251,16 @@ export default function LoadsPage() {
         { event: "*", schema: "public", table: "loads" },
         () => fetchLoads()
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "status_updates" },
+        () => fetchLoads()
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "receipts" },
+        () => fetchLoads()
+      )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);

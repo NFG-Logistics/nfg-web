@@ -1,16 +1,16 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Package, Truck, CheckCircle2, DollarSign, Users2, FileText, Activity, AlertCircle } from "lucide-react";
+import { Package, Truck, DollarSign, Users2, FileText, Activity, AlertCircle, Receipt } from "lucide-react";
 
 export default async function DashboardPage() {
   const supabase = createClient();
 
   let userName = "there";
+  let availableDrivers = 0;
   let activeLoadCount = 0;
-  let driverCount = 0;
-  let deliveredCount = 0;
-  let totalRevenue = 0;
+  let receiptsToday = 0;
+  let monthlyRevenue = 0;
   let dbError: string | null = null;
 
   try {
@@ -25,35 +25,59 @@ export default async function DashboardPage() {
       }
     }
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayISO = today.toISOString();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowISO = tomorrow.toISOString();
+
+    const currentMonth = new Date().getMonth() + 1;
+    const currentYear = new Date().getFullYear();
+
     // Fetch KPIs in parallel
-    const [loadsRes, driversRes, deliveredRes, revenueRes] = await Promise.all([
+    const [loadsRes, driversRes, receiptsRes, revenueRes] = await Promise.all([
       supabase.from("loads").select("id", { count: "exact", head: true }).not("status", "in", '("delivered","cancelled")'),
-      supabase.from("users").select("id", { count: "exact", head: true }).eq("role", "driver").eq("is_active", true),
-      supabase.from("loads").select("id", { count: "exact", head: true }).eq("status", "delivered"),
-      supabase.from("loads").select("rate").eq("status", "delivered"),
+      supabase.from("users").select("id, availability_status").eq("role", "driver").eq("is_active", true),
+      supabase.from("receipts").select("id", { count: "exact", head: true }).gte("created_at", todayISO).lt("created_at", tomorrowISO),
+      supabase.from("loads").select("rate, completed_at").eq("status", "delivered"),
     ]);
 
     // Check for errors
-    const firstError = loadsRes.error || driversRes.error || deliveredRes.error || revenueRes.error;
+    const firstError = loadsRes.error || driversRes.error || receiptsRes.error || revenueRes.error;
     if (firstError) {
       dbError = firstError.message;
       console.error("Dashboard KPI error:", firstError);
     }
 
     activeLoadCount = loadsRes.count || 0;
-    driverCount = driversRes.count || 0;
-    deliveredCount = deliveredRes.count || 0;
-    totalRevenue = (revenueRes.data || []).reduce((sum, l) => sum + (l.rate || 0), 0);
+    
+    // Available Drivers = total drivers - drivers where availability_status != 'available'
+    const totalDrivers = driversRes.data?.length || 0;
+    const unavailableDrivers = driversRes.data?.filter((d) => d.availability_status !== "available").length || 0;
+    availableDrivers = totalDrivers - unavailableDrivers;
+
+    receiptsToday = receiptsRes.count || 0;
+
+    // Monthly Revenue = SUM(rate) where delivered AND month = current month
+    const deliveredLoads = revenueRes.data || [];
+    monthlyRevenue = deliveredLoads
+      .filter((l) => {
+        if (!l.completed_at) return false;
+        const completed = new Date(l.completed_at);
+        return completed.getMonth() + 1 === currentMonth && completed.getFullYear() === currentYear;
+      })
+      .reduce((sum, l) => sum + (l.rate || 0), 0);
   } catch (err) {
     dbError = (err as Error).message;
     console.error("Dashboard exception:", err);
   }
 
   const kpis = [
+    { title: "Available Drivers", value: availableDrivers, icon: Users2, color: "text-primary" },
     { title: "Active Loads", value: activeLoadCount, icon: Package, color: "text-primary" },
-    { title: "Active Drivers", value: driverCount, icon: Truck, color: "text-primary" },
-    { title: "Delivered", value: deliveredCount, icon: CheckCircle2, color: "text-primary" },
-    { title: "Total Revenue", value: `$${totalRevenue.toLocaleString()}`, icon: DollarSign, color: "text-primary" },
+    { title: "Receipts Today", value: receiptsToday, icon: Receipt, color: "text-primary" },
+    { title: "Monthly Revenue", value: `$${monthlyRevenue.toLocaleString()}`, icon: DollarSign, color: "text-primary" },
   ];
 
   const quickActions = [

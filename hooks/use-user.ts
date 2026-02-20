@@ -12,14 +12,23 @@ export function useUser() {
     const supabase = createClient();
 
     async function getUser() {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
+      // Use getUser() (server-validated) to avoid stale/phantom sessions.
+      const { data: auth, error: authError } = await supabase.auth.getUser();
+      if (authError) {
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      if (auth.user) {
         const { data } = await supabase
           .from("users")
           .select("*")
-          .eq("id", session.user.id)
+          .eq("id", auth.user.id)
           .single();
         setUser(data);
+      } else {
+        setUser(null);
       }
       setLoading(false);
     }
@@ -27,6 +36,7 @@ export function useUser() {
     getUser();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      // session may be null if refresh token expired or cookies are missing
       if (session?.user) {
         const { data } = await supabase
           .from("users")

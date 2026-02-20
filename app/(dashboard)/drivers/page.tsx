@@ -3,14 +3,17 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Search, Loader2, Phone, Mail } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Search, Loader2, Phone, Mail, Plus } from "lucide-react";
 import type { User as UserType, Load, LoadStatus } from "@/types";
 import { STATUS_CONFIG } from "@/lib/constants";
+import Link from "next/link";
 
 interface DriverWithLoad extends UserType {
   active_load?: Load | null;
@@ -21,6 +24,7 @@ export default function DriversPage() {
   const [drivers, setDrivers] = useState<DriverWithLoad[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [availabilityFilter, setAvailabilityFilter] = useState<string>("all");
 
   useEffect(() => {
     async function fetchDrivers() {
@@ -60,76 +64,117 @@ export default function DriversPage() {
     fetchDrivers();
   }, []);
 
-  const filtered = drivers.filter((d) =>
-    d.full_name.toLowerCase().includes(search.toLowerCase()) ||
-    d.email.toLowerCase().includes(search.toLowerCase()) ||
-    d.phone?.includes(search)
-  );
+  const filtered = drivers.filter((d) => {
+    const matchesSearch =
+      d.full_name.toLowerCase().includes(search.toLowerCase()) ||
+      d.email.toLowerCase().includes(search.toLowerCase()) ||
+      d.phone?.includes(search);
+    
+    const matchesAvailability =
+      availabilityFilter === "all" ||
+      (availabilityFilter === "available" && d.is_active && (!d.active_load || d.availability_status === "available")) ||
+      (availabilityFilter === "unavailable" && (!d.is_active || d.availability_status !== "available" || d.active_load));
 
-  const available = drivers.filter((d) => d.is_active && !d.active_load);
-  const onLoad = drivers.filter((d) => d.active_load);
+    return matchesSearch && matchesAvailability;
+  });
+
+  const available = drivers.filter((d) => d.is_active && (!d.active_load || d.availability_status === "available"));
+  const unavailable = drivers.filter((d) => !d.is_active || d.availability_status !== "available" || d.active_load);
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Drivers" description={`${drivers.length} total · ${available.length} available · ${onLoad.length} on load`} />
+      <PageHeader title="Drivers" description={`${drivers.length} total · ${available.length} available · ${unavailable.length} unavailable`}>
+        <Button asChild>
+          <Link href="/settings?tab=users">
+            <Plus className="mr-2 h-4 w-4" /> Create New Driver
+          </Link>
+        </Button>
+      </PageHeader>
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input placeholder="Search drivers..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+      {/* Search + Filter */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="relative flex-1 max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input placeholder="Search drivers..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+        </div>
+        <Select value={availabilityFilter} onValueChange={setAvailabilityFilter}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="All Drivers" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Drivers</SelectItem>
+            <SelectItem value="available">Available</SelectItem>
+            <SelectItem value="unavailable">Unavailable</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
-      {/* Drivers Grid */}
-      {loading ? (
-        <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-      ) : filtered.length === 0 ? (
-        <p className="text-center text-sm text-muted-foreground py-16">No drivers found</p>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((driver) => {
-            const initials = driver.full_name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
-            const loadCfg = driver.active_load ? STATUS_CONFIG[driver.active_load.status as LoadStatus] : null;
-            return (
-              <Card key={driver.id}>
-                <CardContent className="p-5">
-                  <div className="flex items-start gap-4">
-                    <Avatar className="h-12 w-12">
-                      <AvatarFallback className="bg-primary/10 text-primary font-semibold">{initials}</AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <h3 className="font-semibold truncate">{driver.full_name}</h3>
-                        {driver.is_active ? (
-                          <Badge variant={driver.active_load ? "warning" : "success"} className="text-xs ml-2 shrink-0">
-                            {driver.active_load ? "On Load" : "Available"}
+      {/* Drivers Table */}
+      <Card>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <p className="text-center text-sm text-muted-foreground py-16">No drivers found</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Driver</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Availability</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Current Load</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map((driver) => {
+                  const initials = driver.full_name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
+                  const loadCfg = driver.active_load ? STATUS_CONFIG[driver.active_load.status as LoadStatus] : null;
+                  const isAvailable = driver.is_active && (!driver.active_load || driver.availability_status === "available");
+                  
+                  return (
+                    <TableRow key={driver.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-8 w-8">
+                            <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">{initials}</AvatarFallback>
+                          </Avatar>
+                          <span className="font-medium">{driver.full_name}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>{driver.email}</TableCell>
+                      <TableCell>{driver.phone || "—"}</TableCell>
+                      <TableCell>
+                        <Badge variant={isAvailable ? "success" : "secondary"}>
+                          {isAvailable ? "Available" : "Unavailable"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={driver.is_active ? "success" : "secondary"}>
+                          {driver.is_active ? "Active" : "Inactive"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {driver.active_load ? (
+                          <Badge variant={loadCfg?.variant} className="text-xs">
+                            {driver.active_load.reference_number}
                           </Badge>
                         ) : (
-                          <Badge variant="secondary" className="text-xs ml-2 shrink-0">Inactive</Badge>
+                          <span className="text-muted-foreground text-sm">—</span>
                         )}
-                      </div>
-
-                      <div className="space-y-1 text-sm text-muted-foreground">
-                        <div className="flex items-center gap-1.5"><Mail className="h-3.5 w-3.5" />{driver.email}</div>
-                        {driver.phone && <div className="flex items-center gap-1.5"><Phone className="h-3.5 w-3.5" />{driver.phone}</div>}
-                      </div>
-
-                      {driver.active_load && (
-                        <div className="mt-3 rounded-md bg-muted/50 p-2.5">
-                          <p className="text-xs text-muted-foreground">Current Load</p>
-                          <div className="flex items-center justify-between mt-1">
-                            <span className="text-sm font-medium">{driver.active_load.reference_number}</span>
-                            <Badge variant={loadCfg?.variant} className="text-xs">{loadCfg?.label}</Badge>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

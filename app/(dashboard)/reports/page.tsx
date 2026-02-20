@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -58,6 +59,9 @@ export default function ReportsPage() {
   const router = useRouter();
   const [loads, setLoads] = useState<Load[]>([]);
   const [drivers, setDrivers] = useState<UserType[]>([]);
+  const [topRoutes, setTopRoutes] = useState<any[]>([]);
+  const [fleetStatus, setFleetStatus] = useState<any>(null);
+  const [revenuePeriod, setRevenuePeriod] = useState<"day" | "week" | "month" | "year">("month");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -67,7 +71,7 @@ export default function ReportsPage() {
     }
     async function fetchReportData() {
       try {
-        const [loadsRes, driversRes] = await Promise.all([
+        const [loadsRes, driversRes, routesRes, fleetRes] = await Promise.all([
           supabase
             .from("loads")
             .select("*")
@@ -78,11 +82,23 @@ export default function ReportsPage() {
             .eq("role", "driver")
             .eq("is_active", true)
             .order("full_name"),
+          supabase
+            .from("top_routes_view")
+            .select("*")
+            .limit(3),
+          supabase
+            .from("fleet_status_view")
+            .select("*")
+            .single(),
         ]);
         if (loadsRes.error) console.error("Reports: loads error", loadsRes.error);
         if (driversRes.error) console.error("Reports: drivers error", driversRes.error);
+        if (routesRes.error) console.error("Reports: routes error", routesRes.error);
+        if (fleetRes.error) console.error("Reports: fleet error", fleetRes.error);
         setLoads(loadsRes.data || []);
         setDrivers(driversRes.data || []);
+        setTopRoutes(routesRes.data || []);
+        setFleetStatus(fleetRes.data || null);
       } catch (err) {
         console.error("Reports fetch exception:", err);
       } finally {
@@ -167,25 +183,47 @@ export default function ReportsPage() {
     }));
   }, [deliveredLoads]);
 
-  // Monthly revenue — strictly using completed_at on delivered loads
-  const monthlyData = useMemo(() => {
-    const monthly = deliveredLoads.reduce(
-      (acc, l) => {
-        // Only count loads that have completed_at (admin-approved delivered)
-        if (!l.completed_at) return acc;
-        const month = new Date(l.completed_at).toLocaleDateString("en-US", {
-          month: "short",
-          year: "2-digit",
-        });
-        acc[month] = (acc[month] || 0) + (l.rate || 0);
-        return acc;
-      },
-      {} as Record<string, number>
-    );
-    return Object.entries(monthly)
-      .map(([month, revenue]) => ({ month, revenue }))
-      .slice(-12);
-  }, [deliveredLoads]);
+  // Revenue data by period — strictly using completed_at on delivered loads
+  const revenueData = useMemo(() => {
+    const now = new Date();
+    const periodMap: Record<string, number> = {};
+
+    deliveredLoads.forEach((l) => {
+      if (!l.completed_at) return;
+      const completed = new Date(l.completed_at);
+      let key: string;
+
+      switch (revenuePeriod) {
+        case "day":
+          key = completed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          break;
+        case "week":
+          const weekStart = new Date(completed);
+          weekStart.setDate(completed.getDate() - completed.getDay());
+          key = `Week of ${weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+          break;
+        case "month":
+          key = completed.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+          break;
+        case "year":
+          key = completed.getFullYear().toString();
+          break;
+        default:
+          key = completed.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+      }
+
+      periodMap[key] = (periodMap[key] || 0) + (l.rate || 0);
+    });
+
+    return Object.entries(periodMap)
+      .map(([period, revenue]) => ({ period, revenue }))
+      .slice(-12)
+      .sort((a, b) => {
+        // Sort by date for proper chart ordering
+        if (revenuePeriod === "year") return a.period.localeCompare(b.period);
+        return a.period.localeCompare(b.period);
+      });
+  }, [deliveredLoads, revenuePeriod]);
 
   // Top drivers — delivered loads only
   const topDrivers = useMemo(() => {
@@ -315,6 +353,8 @@ export default function ReportsPage() {
         <TabsList>
           <TabsTrigger value="revenue">Revenue</TabsTrigger>
           <TabsTrigger value="drivers">Top Drivers</TabsTrigger>
+          <TabsTrigger value="routes">Top Routes</TabsTrigger>
+          <TabsTrigger value="fleet">Fleet Status</TabsTrigger>
           <TabsTrigger value="status">Status Breakdown</TabsTrigger>
           <TabsTrigger value="payments">Payments</TabsTrigger>
         </TabsList>
@@ -323,28 +363,43 @@ export default function ReportsPage() {
         <TabsContent value="revenue">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <DollarSign className="h-5 w-5 text-emerald-500" />
-                Monthly Revenue
-              </CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Based on <code>completed_at</code> of delivered loads only
-              </p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <DollarSign className="h-5 w-5 text-emerald-500" />
+                    Revenue
+                  </CardTitle>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Based on <code>completed_at</code> of delivered loads only
+                  </p>
+                </div>
+                <Select value={revenuePeriod} onValueChange={(v) => setRevenuePeriod(v as any)}>
+                  <SelectTrigger className="w-[140px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="day">Day</SelectItem>
+                    <SelectItem value="week">Week</SelectItem>
+                    <SelectItem value="month">Month</SelectItem>
+                    <SelectItem value="year">Year</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent>
-              {monthlyData.length === 0 ? (
+              {revenueData.length === 0 ? (
                 <p className="text-center text-sm text-muted-foreground py-8">
                   No revenue data yet
                 </p>
               ) : (
                 <div className="h-[350px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={monthlyData}>
+                    <BarChart data={revenueData}>
                       <CartesianGrid
                         strokeDasharray="3 3"
                         className="stroke-muted"
                       />
-                      <XAxis dataKey="month" className="text-xs" />
+                      <XAxis dataKey="period" className="text-xs" />
                       <YAxis
                         tickFormatter={(v) =>
                           `$${(v / 1000).toFixed(0)}k`
@@ -519,6 +574,102 @@ export default function ReportsPage() {
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Top Routes ────────────────────────────────────────────── */}
+        <TabsContent value="routes">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-blue-500" />
+                Top Interstate Routes
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Top 3 routes by load count (TN - PA format)
+              </p>
+            </CardHeader>
+            <CardContent>
+              {topRoutes.length === 0 ? (
+                <p className="text-center text-sm text-muted-foreground py-8">
+                  No route data available yet
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {topRoutes.map((route, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between p-4 border rounded-lg"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary font-bold">
+                          {idx + 1}
+                        </div>
+                        <div>
+                          <p className="font-semibold">{route.route || "—"}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {route.load_count || 0} loads
+                          </p>
+                        </div>
+                      </div>
+                      {route.total_revenue && (
+                        <div className="text-right">
+                          <p className="text-sm text-muted-foreground">Revenue</p>
+                          <p className="font-semibold">
+                            ${(route.total_revenue || 0).toLocaleString()}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Fleet Status ────────────────────────────────────────────── */}
+        <TabsContent value="fleet">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Package className="h-5 w-5 text-purple-500" />
+                Fleet Status
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Current fleet utilization and availability
+              </p>
+            </CardHeader>
+            <CardContent>
+              {!fleetStatus ? (
+                <p className="text-center text-sm text-muted-foreground py-8">
+                  No fleet data available yet
+                </p>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="p-4 border rounded-lg">
+                    <p className="text-sm text-muted-foreground">Total Trucks</p>
+                    <p className="text-2xl font-bold">{fleetStatus.total_trucks || 0}</p>
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <p className="text-sm text-muted-foreground">Available Trucks</p>
+                    <p className="text-2xl font-bold text-green-600">
+                      {fleetStatus.available_trucks || 0}
+                    </p>
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <p className="text-sm text-muted-foreground">Total Trailers</p>
+                    <p className="text-2xl font-bold">{fleetStatus.total_trailers || 0}</p>
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <p className="text-sm text-muted-foreground">Available Trailers</p>
+                    <p className="text-2xl font-bold text-green-600">
+                      {fleetStatus.available_trailers || 0}
+                    </p>
+                  </div>
                 </div>
               )}
             </CardContent>
