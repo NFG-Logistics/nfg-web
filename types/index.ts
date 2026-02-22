@@ -106,7 +106,6 @@ export interface Load {
   dispatcher_id: string;
   truck_id?: string;
   trailer_id?: string;
-  commodity?: string;
   weight_lbs?: number;
   pieces?: number;
   equipment_type?: string;
@@ -160,16 +159,17 @@ export interface Document {
 
 export interface Receipt {
   id: string;
-  load_id: string;
+  load_id?: string; // Optional - receipts can exist without a load
   stop_id?: string;
   uploaded_by: string;
   file_url?: string;
   file_name?: string;
   file_type?: string;
-  signed_by?: string;
-  no_pod_available: boolean;
+  signed_by?: string; // Optional - for backward compatibility
+  no_pod_available?: boolean; // Optional - for backward compatibility
   receipt_type?: "fuel" | "road_service" | "toll" | "lumper" | "other";
   truck_id?: string;
+  amount?: number; // Cost/amount of the receipt
   notes?: string;
   created_at: string;
 }

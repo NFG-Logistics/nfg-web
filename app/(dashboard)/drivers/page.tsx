@@ -29,12 +29,21 @@ export default function DriversPage() {
   useEffect(() => {
     async function fetchDrivers() {
       try {
-        // Fetch all drivers
-        const { data: driverData, error: driverErr } = await supabase
+        // PART 3: Fix driver filter - use server query based on availability filter
+        let query = supabase
           .from("users")
           .select("*")
-          .eq("role", "driver")
-          .order("full_name");
+          .eq("role", "driver");
+
+        // Apply availability filter at server level
+        if (availabilityFilter === "available") {
+          query = query.eq("availability_status", "available");
+        } else if (availabilityFilter === "unavailable") {
+          query = query.neq("availability_status", "available");
+        }
+        // "all" doesn't need additional filter
+
+        const { data: driverData, error: driverErr } = await query.order("full_name");
 
         if (driverErr) console.error("Failed to fetch drivers:", driverErr);
 
@@ -62,24 +71,21 @@ export default function DriversPage() {
       }
     }
     fetchDrivers();
-  }, []);
+  }, [availabilityFilter, supabase]);
 
+  // Client-side search filter only (availability is handled by server)
   const filtered = drivers.filter((d) => {
     const matchesSearch =
       d.full_name.toLowerCase().includes(search.toLowerCase()) ||
       d.email.toLowerCase().includes(search.toLowerCase()) ||
       d.phone?.includes(search);
-    
-    const matchesAvailability =
-      availabilityFilter === "all" ||
-      (availabilityFilter === "available" && d.is_active && (!d.active_load || d.availability_status === "available")) ||
-      (availabilityFilter === "unavailable" && (!d.is_active || d.availability_status !== "available" || d.active_load));
 
-    return matchesSearch && matchesAvailability;
+    return matchesSearch;
   });
 
-  const available = drivers.filter((d) => d.is_active && (!d.active_load || d.availability_status === "available"));
-  const unavailable = drivers.filter((d) => !d.is_active || d.availability_status !== "available" || d.active_load);
+  // Count stats for display
+  const available = drivers.filter((d) => d.availability_status === "available");
+  const unavailable = drivers.filter((d) => d.availability_status !== "available");
 
   return (
     <div className="space-y-6">

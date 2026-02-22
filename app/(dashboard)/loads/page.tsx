@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { useUser } from "@/hooks/use-user";
 import { PageHeader } from "@/components/page-header";
@@ -297,8 +298,7 @@ export default function LoadsPage() {
       tabLoads.filter(
         (l) =>
           l.reference_number.toLowerCase().includes(search.toLowerCase()) ||
-          l.driver?.full_name?.toLowerCase().includes(search.toLowerCase()) ||
-          l.commodity?.toLowerCase().includes(search.toLowerCase())
+          l.driver?.full_name?.toLowerCase().includes(search.toLowerCase())
       ),
     [tabLoads, search]
   );
@@ -317,7 +317,6 @@ export default function LoadsPage() {
         driver_id: fd.get("driver_id") || null,
         truck_id: fd.get("truck_id") || null,
         trailer_id: fd.get("trailer_id") || null,
-        commodity: fd.get("commodity"),
         rate: Number(fd.get("rate")) || 0,
         equipment_type: fd.get("equipment_type"),
         special_instructions: fd.get("special_instructions"),
@@ -357,6 +356,84 @@ export default function LoadsPage() {
     setCreateOpen(false);
     setSubmitting(false);
     fetchLoads();
+  };
+
+  // ── CSV Export handler ──────────────────────────────────────────────
+  const handleExportCSV = async () => {
+    try {
+      // Fetch all loads (active, completed, cancelled)
+      const { data: allLoads, error } = await supabase
+        .from("loads")
+        .select(
+          `
+          *,
+          driver:users!loads_driver_id_fkey(full_name),
+          stops(type, state)
+        `
+        )
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        toast.error(`Failed to fetch loads: ${error.message}`);
+        return;
+      }
+
+      // Process data for CSV
+      const csvRows = allLoads.map((load: any) => {
+        const stops = load.stops || [];
+        const pickupStop = stops.find((s: any) => s.type === "pickup");
+        const deliveryStop = stops.find((s: any) => s.type === "delivery");
+
+        return {
+          "Load Number": load.reference_number || "",
+          Driver: load.driver?.full_name || "",
+          "Pickup State": pickupStop?.state || "",
+          "Delivery State": deliveryStop?.state || "",
+          Rate: load.rate || 0,
+          "Payment Status": load.payment_status || "",
+          Status: load.status || "",
+          "Created Date": load.created_at
+            ? new Date(load.created_at).toLocaleDateString()
+            : "",
+          "Completed Date": load.completed_at
+            ? new Date(load.completed_at).toLocaleDateString()
+            : "",
+        };
+      });
+
+      // Convert to CSV
+      const headers = Object.keys(csvRows[0] || {});
+      const csvContent = [
+        headers.join(","),
+        ...csvRows.map((row: any) =>
+          headers
+            .map((header) => {
+              const value = row[header];
+              // Escape commas and quotes
+              if (typeof value === "string" && (value.includes(",") || value.includes('"'))) {
+                return `"${value.replace(/"/g, '""')}"`;
+              }
+              return value;
+            })
+            .join(",")
+        ),
+      ].join("\n");
+
+      // Download
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.setAttribute("href", url);
+      link.setAttribute("download", `loads-export-${new Date().toISOString().split("T")[0]}.csv`);
+      link.style.visibility = "hidden";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      toast.success("CSV exported successfully");
+    } catch (err) {
+      toast.error(`Export failed: ${(err as Error).message}`);
+    }
   };
 
   // ── Cancel load handler ─────────────────────────────────────────────
@@ -418,8 +495,10 @@ export default function LoadsPage() {
       <PageHeader title="Loads" description="Manage all loads and shipments">
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" /> New Load
+            <Button asChild>
+              <Link href="/loads/dispatch">
+                <Plus className="mr-2 h-4 w-4" /> Dispatch Driver
+              </Link>
             </Button>
           </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -448,10 +527,6 @@ export default function LoadsPage() {
                 <div className="space-y-2">
                   <Label>Rate ($)</Label>
                   <Input name="rate" type="number" min="0" step="0.01" required />
-                </div>
-                <div className="space-y-2">
-                  <Label>Commodity</Label>
-                  <Input name="commodity" />
                 </div>
                 <div className="space-y-2">
                   <Label>Equipment</Label>
@@ -620,6 +695,7 @@ export default function LoadsPage() {
             tab="active"
             onView={openDetail}
             onCancel={setCancelLoad}
+            onUpdate={fetchLoads}
           />
         </TabsContent>
 
@@ -630,6 +706,7 @@ export default function LoadsPage() {
             loading={loading}
             tab="completed"
             onView={openDetail}
+            onUpdate={fetchLoads}
           />
         </TabsContent>
 
@@ -640,6 +717,7 @@ export default function LoadsPage() {
             loading={loading}
             tab="cancelled"
             onView={openDetail}
+            onUpdate={fetchLoads}
           />
         </TabsContent>
       </Tabs>
@@ -703,12 +781,14 @@ function LoadsTable({
   tab,
   onView,
   onCancel,
+  onUpdate,
 }: {
   loads: LoadRow[];
   loading: boolean;
   tab: "active" | "completed" | "cancelled";
   onView: (l: LoadRow) => void;
   onCancel?: (l: LoadRow) => void;
+  onUpdate: () => void;
 }) {
   if (loading) {
     return (
@@ -745,7 +825,6 @@ function LoadsTable({
               <TableHead className="font-semibold">Driver</TableHead>
               <TableHead className="font-semibold">Status</TableHead>
               <TableHead className="font-semibold">Payment</TableHead>
-              <TableHead className="font-semibold hidden md:table-cell">Commodity</TableHead>
               {tab === "completed" && (
                 <TableHead className="font-semibold hidden lg:table-cell">Completed</TableHead>
               )}
@@ -774,10 +853,7 @@ function LoadsTable({
                     <Badge variant={sCfg?.variant}>{sCfg?.label}</Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge variant={pCfg?.variant}>{pCfg?.label}</Badge>
-                  </TableCell>
-                  <TableCell className="hidden md:table-cell">
-                    {load.commodity || "—"}
+                    <PaymentStatusDropdown load={load} onUpdate={onUpdate} />
                   </TableCell>
                   {tab === "completed" && (
                     <TableCell className="hidden lg:table-cell text-sm text-muted-foreground">
@@ -895,11 +971,6 @@ function LoadDetailDialog({
                 icon={<UserIcon className="h-4 w-4" />}
                 label="Dispatcher"
                 value={load.dispatcher?.full_name ?? "—"}
-              />
-              <DetailItem
-                icon={<Package className="h-4 w-4" />}
-                label="Commodity"
-                value={load.commodity || "—"}
               />
               <DetailItem
                 icon={<Package className="h-4 w-4" />}
@@ -1207,6 +1278,56 @@ function LoadDetailDialog({
         </ScrollArea>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Payment Status Dropdown (editable)
+// ---------------------------------------------------------------------------
+function PaymentStatusDropdown({
+  load,
+  onUpdate,
+}: {
+  load: LoadRow;
+  onUpdate: () => void;
+}) {
+  const supabase = useMemo(() => createClient(), []);
+  const [updating, setUpdating] = useState(false);
+  const pCfg = PAYMENT_CONFIG[load.payment_status];
+
+  const handleChange = async (newStatus: "unpaid" | "invoiced" | "paid") => {
+    setUpdating(true);
+    const { error } = await supabase
+      .from("loads")
+      .update({ payment_status: newStatus })
+      .eq("id", load.id);
+
+    if (error) {
+      toast.error(`Failed to update payment status: ${error.message}`);
+    } else {
+      toast.success("Payment status updated");
+      onUpdate();
+    }
+    setUpdating(false);
+  };
+
+  return (
+    <Select
+      value={load.payment_status}
+      onValueChange={handleChange}
+      disabled={updating}
+    >
+      <SelectTrigger className="w-[120px] h-7">
+        <Badge variant={pCfg?.variant} className="w-full justify-center">
+          {pCfg?.label}
+        </Badge>
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="unpaid">Unpaid</SelectItem>
+        <SelectItem value="invoiced">Invoiced</SelectItem>
+        <SelectItem value="paid">Paid</SelectItem>
+      </SelectContent>
+    </Select>
   );
 }
 

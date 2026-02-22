@@ -18,6 +18,7 @@ interface ReceiptWithLoad extends Receipt {
   uploader?: { full_name: string };
   driver?: { full_name: string };
   truck?: { truck_number: string };
+  uploaded_by_user?: { full_name: string };
 }
 
 const RECEIPT_TYPE_LABELS: Record<string, string> = {
@@ -48,7 +49,7 @@ export default function ReceiptsPage() {
           .select(
             `*,
             load:load_id(reference_number, status, driver_id),
-            uploader:uploaded_by(full_name),
+            uploaded_by_user:uploaded_by(full_name),
             truck:truck_id(truck_number)`
           )
           .order("created_at", { ascending: false });
@@ -89,14 +90,14 @@ export default function ReceiptsPage() {
   const filtered = useMemo(() => {
     return receipts.filter((r) => {
       const matchesSearch =
-        (r.load as any)?.reference_number?.toLowerCase().includes(search.toLowerCase()) ||
-        r.signed_by?.toLowerCase().includes(search.toLowerCase()) ||
+        (r.uploaded_by_user as any)?.full_name?.toLowerCase().includes(search.toLowerCase()) ||
+        r.receipt_type?.toLowerCase().includes(search.toLowerCase()) ||
         r.file_name?.toLowerCase().includes(search.toLowerCase());
       
       const matchesDriver =
         driverFilter === "all" ||
-        (r.load as any)?.driver_id === driverFilter ||
-        r.driver?.full_name?.toLowerCase().includes(driverFilter.toLowerCase());
+        r.uploaded_by === driverFilter ||
+        (r.uploaded_by_user as any)?.full_name?.toLowerCase().includes(driverFilter.toLowerCase());
 
       const matchesType = typeFilter === "all" || r.receipt_type === typeFilter;
 
@@ -173,42 +174,36 @@ export default function ReceiptsPage() {
             <Card key={receipt.id} className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => setViewReceipt(receipt)}>
               <div className="aspect-[4/3] bg-muted flex items-center justify-center">
                 {receipt.file_url ? (
-                  <img src={receipt.file_url} alt="POD" className="w-full h-full object-cover" />
-                ) : receipt.no_pod_available ? (
-                  <div className="text-center p-4">
-                    <AlertCircle className="h-8 w-8 text-amber-500 mx-auto mb-2" />
-                    <p className="text-xs text-muted-foreground">No POD Available</p>
-                  </div>
+                  <img src={receipt.file_url} alt="Receipt" className="w-full h-full object-cover" />
                 ) : (
                   <FileImage className="h-10 w-10 text-muted-foreground" />
                 )}
               </div>
               <CardContent className="p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-semibold">{(receipt.load as any)?.reference_number || "—"}</span>
-                  <div className="flex items-center gap-1">
-                    {receipt.receipt_type && receipt.receipt_type !== "other" && (
-                      <Badge variant="outline" className="text-[10px] px-1 py-0">
-                        {RECEIPT_TYPE_LABELS[receipt.receipt_type]}
-                      </Badge>
-                    )}
-                    {receipt.no_pod_available ? (
-                      <Badge variant="warning" className="text-xs">No POD</Badge>
-                    ) : (
-                      <Badge variant="success" className="text-xs">POD</Badge>
-                    )}
-                  </div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-semibold">
+                    {receipt.uploaded_by_user?.full_name || "Unknown Driver"}
+                  </span>
+                  {receipt.receipt_type && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0.5">
+                      {RECEIPT_TYPE_LABELS[receipt.receipt_type] || receipt.receipt_type}
+                    </Badge>
+                  )}
                 </div>
-                {receipt.driver?.full_name && (
-                  <p className="text-xs text-muted-foreground">Driver: {receipt.driver.full_name}</p>
+                {receipt.amount && (
+                  <p className="text-sm font-semibold text-primary mb-1">
+                    ${Number(receipt.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
                 )}
                 {receipt.receipt_type === "road_service" && receipt.truck?.truck_number && (
-                  <p className="text-xs text-muted-foreground">Truck: {receipt.truck.truck_number}</p>
+                  <p className="text-xs text-muted-foreground">Truck #{receipt.truck.truck_number}</p>
                 )}
-                {receipt.signed_by && <p className="text-xs text-muted-foreground">Signed by: {receipt.signed_by}</p>}
                 <p className="text-xs text-muted-foreground mt-1">
                   {format(new Date(receipt.created_at), "MMM d, yyyy")}
                 </p>
+                {receipt.notes && (
+                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{receipt.notes}</p>
+                )}
               </CardContent>
             </Card>
           ))}
@@ -219,29 +214,51 @@ export default function ReceiptsPage() {
       <Dialog open={!!viewReceipt} onOpenChange={() => setViewReceipt(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Receipt — {(viewReceipt?.load as any)?.reference_number}</DialogTitle>
+            <DialogTitle>Receipt — {viewReceipt?.uploaded_by_user?.full_name || "Unknown"}</DialogTitle>
           </DialogHeader>
           {viewReceipt && (
             <div className="space-y-4">
-              {viewReceipt.file_url ? (
+              {viewReceipt.file_url && (
                 <div className="rounded-md overflow-hidden border">
-                  <img src={viewReceipt.file_url} alt="POD" className="w-full" />
+                  <img src={viewReceipt.file_url} alt="Receipt" className="w-full" />
                 </div>
-              ) : viewReceipt.no_pod_available ? (
-                <div className="rounded-md border p-8 text-center">
-                  <AlertCircle className="h-10 w-10 text-amber-500 mx-auto mb-2" />
-                  <p className="text-sm font-medium">No POD Available</p>
-                  <p className="text-xs text-muted-foreground mt-1">Driver marked this load as having no POD</p>
-                </div>
-              ) : null}
+              )}
 
               <div className="space-y-2 text-sm">
-                {viewReceipt.signed_by && (
-                  <div className="flex justify-between"><span className="text-muted-foreground">Signed By</span><span className="font-medium">{viewReceipt.signed_by}</span></div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Driver</span>
+                  <span className="font-medium">{viewReceipt.uploaded_by_user?.full_name || "—"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Receipt Type</span>
+                  <span className="font-medium">
+                    {viewReceipt.receipt_type ? RECEIPT_TYPE_LABELS[viewReceipt.receipt_type] : "—"}
+                  </span>
+                </div>
+                {viewReceipt.amount && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Amount</span>
+                    <span className="font-medium text-primary">
+                      ${Number(viewReceipt.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
                 )}
-                <div className="flex justify-between"><span className="text-muted-foreground">Uploaded By</span><span>{(viewReceipt.uploader as any)?.full_name || "—"}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Upload Date</span><span>{format(new Date(viewReceipt.created_at), "MMM d, yyyy h:mm a")}</span></div>
-                {viewReceipt.notes && <div><span className="text-muted-foreground">Notes:</span><p className="mt-1">{viewReceipt.notes}</p></div>}
+                {viewReceipt.receipt_type === "road_service" && viewReceipt.truck?.truck_number && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Truck #</span>
+                    <span className="font-medium">{viewReceipt.truck.truck_number}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Date</span>
+                  <span>{format(new Date(viewReceipt.created_at), "MMM d, yyyy h:mm a")}</span>
+                </div>
+                {viewReceipt.notes && (
+                  <div>
+                    <span className="text-muted-foreground">Notes:</span>
+                    <p className="mt-1 text-sm">{viewReceipt.notes}</p>
+                  </div>
+                )}
               </div>
 
               {viewReceipt.file_url && (

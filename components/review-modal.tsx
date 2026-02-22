@@ -251,9 +251,6 @@ export function ReviewModal({ load, open, onClose, onDone }: ReviewModalProps) {
                 label="Dispatched"
                 value={fmtDate(load.dispatched_at)}
               />
-              {load.commodity && (
-                <DetailRow icon={<Package className="h-4 w-4" />} label="Commodity" value={load.commodity} />
-              )}
               {load.weight_lbs != null && (
                 <DetailRow icon={<Package className="h-4 w-4" />} label="Weight" value={`${load.weight_lbs.toLocaleString()} lbs`} />
               )}

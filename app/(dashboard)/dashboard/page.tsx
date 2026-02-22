@@ -39,7 +39,12 @@ export default async function DashboardPage() {
     const [loadsRes, driversRes, receiptsRes, revenueRes] = await Promise.all([
       supabase.from("loads").select("id", { count: "exact", head: true }).not("status", "in", '("delivered","cancelled")'),
       supabase.from("users").select("id, availability_status").eq("role", "driver").eq("is_active", true),
-      supabase.from("receipts").select("id", { count: "exact", head: true }).gte("created_at", todayISO).lt("created_at", tomorrowISO),
+      supabase
+        .from("receipts")
+        .select("id", { count: "exact", head: true })
+        .gte("created_at", todayISO)
+        .lt("created_at", tomorrowISO)
+        .in("receipt_type", ["fuel", "road_service"]),
       supabase.from("loads").select("rate, completed_at").eq("status", "delivered"),
     ]);
 

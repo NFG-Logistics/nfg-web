@@ -25,8 +25,10 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // IMPORTANT: use getUser() instead of getSession() — it validates with the server
-  // Do NOT fetch profile here — move role validation to layout/server components
+  // PART 3: Only check session existence using supabase.auth.getUser()
+  // DO NOT fetch profile in middleware
+  // DO NOT invalidate session if profile missing
+  // Only redirect to /login if getUser() returns null
   const {
     data: { user },
   } = await supabase.auth.getUser();

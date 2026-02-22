@@ -185,44 +185,80 @@ export default function ReportsPage() {
 
   // Revenue data by period — strictly using completed_at on delivered loads
   const revenueData = useMemo(() => {
-    const now = new Date();
-    const periodMap: Record<string, number> = {};
+    const periodMap: Record<string, { revenue: number; sortKey: number }> = {};
 
     deliveredLoads.forEach((l) => {
       if (!l.completed_at) return;
       const completed = new Date(l.completed_at);
       let key: string;
+      let sortKey: number;
 
       switch (revenuePeriod) {
         case "day":
-          key = completed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          key = completed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+          sortKey = completed.getTime();
           break;
         case "week":
           const weekStart = new Date(completed);
           weekStart.setDate(completed.getDate() - completed.getDay());
-          key = `Week of ${weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+          const year = completed.getFullYear();
+          const weekNum = Math.ceil((completed.getTime() - new Date(year, 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000));
+          key = `${year}-W${weekNum.toString().padStart(2, "0")}`;
+          sortKey = year * 100 + weekNum;
           break;
         case "month":
-          key = completed.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+          key = completed.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+          sortKey = completed.getFullYear() * 100 + (completed.getMonth() + 1);
+          break;
+        case "year":
+          key = completed.getFullYear().toString();
+          sortKey = completed.getFullYear();
+          break;
+        default:
+          key = completed.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+          sortKey = completed.getFullYear() * 100 + (completed.getMonth() + 1);
+      }
+
+      if (!periodMap[key]) {
+        periodMap[key] = { revenue: 0, sortKey };
+      }
+      periodMap[key].revenue += l.rate || 0;
+    });
+
+    // Get all periods and fill gaps if needed
+    const allPeriods = new Set<string>();
+    deliveredLoads.forEach((l) => {
+      if (!l.completed_at) return;
+      const completed = new Date(l.completed_at);
+      let key: string;
+      switch (revenuePeriod) {
+        case "day":
+          key = completed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+          break;
+        case "week":
+          const weekStart = new Date(completed);
+          weekStart.setDate(completed.getDate() - completed.getDay());
+          const year = completed.getFullYear();
+          const weekNum = Math.ceil((completed.getTime() - new Date(year, 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000));
+          key = `${year}-W${weekNum.toString().padStart(2, "0")}`;
+          break;
+        case "month":
+          key = completed.toLocaleDateString("en-US", { month: "short", year: "numeric" });
           break;
         case "year":
           key = completed.getFullYear().toString();
           break;
         default:
-          key = completed.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+          key = completed.toLocaleDateString("en-US", { month: "short", year: "numeric" });
       }
-
-      periodMap[key] = (periodMap[key] || 0) + (l.rate || 0);
+      allPeriods.add(key);
     });
 
+    // Sort chronologically ascending
     return Object.entries(periodMap)
-      .map(([period, revenue]) => ({ period, revenue }))
-      .slice(-12)
-      .sort((a, b) => {
-        // Sort by date for proper chart ordering
-        if (revenuePeriod === "year") return a.period.localeCompare(b.period);
-        return a.period.localeCompare(b.period);
-      });
+      .map(([period, data]) => ({ period, revenue: data.revenue, sortKey: data.sortKey }))
+      .sort((a, b) => a.sortKey - b.sortKey)
+      .slice(-12);
   }, [deliveredLoads, revenuePeriod]);
 
   // Top drivers — delivered loads only
@@ -611,7 +647,7 @@ export default function ReportsPage() {
                         <div>
                           <p className="font-semibold">{route.route || "—"}</p>
                           <p className="text-sm text-muted-foreground">
-                            {route.load_count || 0} loads
+                            {route.delivered_count || 0} loads
                           </p>
                         </div>
                       </div>
