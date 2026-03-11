@@ -279,17 +279,17 @@ export default function LoadsPage() {
     [tabLoads, search]
   );
 
-  // ── CSV Export handler ──────────────────────────────────────────────
+  // ── CSV Export handler (Driver Schedule format) ─────────────────────
   const handleExportCSV = async () => {
     try {
-      // Fetch all loads (active, completed, cancelled)
+      // Fetch all loads with stops and driver info
       const { data: allLoads, error } = await supabase
         .from("loads")
         .select(
           `
           *,
           driver:users!loads_driver_id_fkey(full_name),
-          stops(type, state)
+          stops(type, city, state, appointment_date, stop_order)
         `
         )
         .order("created_at", { ascending: false });
@@ -299,44 +299,72 @@ export default function LoadsPage() {
         return;
       }
 
-      // Process data for CSV
+      // Helper to format date for CSV
+      const fmtDate = (d: string | null | undefined) => {
+        if (!d) return "";
+        return new Date(d).toLocaleDateString("en-US", {
+          month: "2-digit",
+          day: "2-digit",
+          year: "numeric",
+        });
+      };
+
+      // Process data for CSV — exact column order:
+      // Status | Pickup Date | Delivery Date | Company Name | Load Number |
+      // Pickup City, State | Delivery City, State | Driver | Note
       const csvRows = allLoads.map((load: any) => {
-        const stops = load.stops || [];
+        const stops = [...(load.stops || [])].sort(
+          (a: any, b: any) => (a.stop_order ?? 0) - (b.stop_order ?? 0)
+        );
         const pickupStop = stops.find((s: any) => s.type === "pickup");
-        const deliveryStop = stops.find((s: any) => s.type === "delivery");
+        const deliveryStop = [...stops].reverse().find((s: any) => s.type === "delivery");
+
+        const pickupCityState = pickupStop
+          ? [pickupStop.city, pickupStop.state].filter(Boolean).join(", ")
+          : "";
+        const deliveryCityState = deliveryStop
+          ? [deliveryStop.city, deliveryStop.state].filter(Boolean).join(", ")
+          : "";
 
         return {
-          "Load Number": load.reference_number || "",
-          Driver: load.driver?.full_name || "",
-          "Pickup State": pickupStop?.state || "",
-          "Delivery State": deliveryStop?.state || "",
-          Rate: load.rate || 0,
-          "Payment Status": load.payment_status || "",
           Status: load.status || "",
-          "Created Date": load.created_at
-            ? new Date(load.created_at).toLocaleDateString()
-            : "",
-          "Completed Date": load.completed_at
-            ? new Date(load.completed_at).toLocaleDateString()
-            : "",
+          "Pickup Date": fmtDate(pickupStop?.appointment_date),
+          "Delivery Date": fmtDate(deliveryStop?.appointment_date),
+          "Company Name": load.client_name || "",
+          "Load Number": load.reference_number || "",
+          "Pickup City, State": pickupCityState,
+          "Delivery City, State": deliveryCityState,
+          Driver: load.driver?.full_name || "",
+          Note: load.special_instructions || "",
         };
       });
 
-      // Convert to CSV
-      const headers = Object.keys(csvRows[0] || {});
+      // Fixed column order
+      const headers = [
+        "Status",
+        "Pickup Date",
+        "Delivery Date",
+        "Company Name",
+        "Load Number",
+        "Pickup City, State",
+        "Delivery City, State",
+        "Driver",
+        "Note",
+      ];
+
+      // Escape CSV values
+      const escapeCSV = (value: any) => {
+        const str = String(value ?? "");
+        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+
       const csvContent = [
         headers.join(","),
         ...csvRows.map((row: any) =>
-          headers
-            .map((header) => {
-              const value = row[header];
-              // Escape commas and quotes
-              if (typeof value === "string" && (value.includes(",") || value.includes('"'))) {
-                return `"${value.replace(/"/g, '""')}"`;
-              }
-              return value;
-            })
-            .join(",")
+          headers.map((header) => escapeCSV(row[header])).join(",")
         ),
       ].join("\n");
 
@@ -345,13 +373,16 @@ export default function LoadsPage() {
       const link = document.createElement("a");
       const url = URL.createObjectURL(blob);
       link.setAttribute("href", url);
-      link.setAttribute("download", `loads-export-${new Date().toISOString().split("T")[0]}.csv`);
+      link.setAttribute(
+        "download",
+        `driver-schedule-${new Date().toISOString().split("T")[0]}.csv`
+      );
       link.style.visibility = "hidden";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
 
-      toast.success("CSV exported successfully");
+      toast.success("Driver schedule exported successfully");
     } catch (err) {
       toast.error(`Export failed: ${(err as Error).message}`);
     }
@@ -416,7 +447,7 @@ export default function LoadsPage() {
       <PageHeader title="Loads" description="Manage all loads and shipments">
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleExportCSV}>
-            <FileText className="mr-2 h-4 w-4" /> Export CSV
+            <FileText className="mr-2 h-4 w-4" /> Export Schedule
           </Button>
           <Button asChild>
             <Link href="/loads/dispatch">

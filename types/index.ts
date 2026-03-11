@@ -110,6 +110,7 @@ export interface Load {
   pieces?: number;
   equipment_type?: string;
   special_instructions?: string;
+  client_name?: string;
   rate: number;
   payment_status: PaymentStatus;
   cancel_reason?: string;

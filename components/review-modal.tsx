@@ -96,7 +96,11 @@ export function ReviewModal({ load, open, onClose, onDone }: ReviewModalProps) {
   const supabase = createClient();
 
   const stops = [...(load.stops ?? [])].sort((a, b) => a.stop_order - b.stop_order);
-  const receipts = load.receipts ?? [];
+  // Filter receipts to only show PODs (those linked to this load via load_id)
+  const allReceipts = load.receipts ?? [];
+  const receipts = allReceipts.filter(
+    (r) => r.load_id === load.id || r.receipt_type === "pod" || (!r.receipt_type && r.load_id)
+  );
   const updates = [...(load.status_updates ?? [])].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
@@ -251,6 +255,13 @@ export function ReviewModal({ load, open, onClose, onDone }: ReviewModalProps) {
                 label="Dispatched"
                 value={fmtDate(load.dispatched_at)}
               />
+              {load.client_name && (
+                <DetailRow
+                  icon={<Package className="h-4 w-4" />}
+                  label="Client Company"
+                  value={load.client_name}
+                />
+              )}
               {load.weight_lbs != null && (
                 <DetailRow icon={<Package className="h-4 w-4" />} label="Weight" value={`${load.weight_lbs.toLocaleString()} lbs`} />
               )}

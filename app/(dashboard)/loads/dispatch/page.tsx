@@ -61,6 +61,8 @@ export default function DispatchPage() {
   // Section 2: Load Details
   const [loadNumber, setLoadNumber] = useState("");
   const [rate, setRate] = useState("");
+  const [clientName, setClientName] = useState("");
+  const [loadNotes, setLoadNotes] = useState("");
   const [rateConfirmation, setRateConfirmation] = useState<File | null>(null);
 
   // Section 3: Driver Selection
@@ -192,6 +194,10 @@ export default function DispatchPage() {
       toast.error("Rate must be greater than 0");
       return false;
     }
+    if (!clientName.trim()) {
+      toast.error("Client company name is required");
+      return false;
+    }
     return true;
   };
 
@@ -269,6 +275,8 @@ export default function DispatchPage() {
           driver_id: selectedDriver,
           reference_number: loadNumber,
           rate: Number(rate),
+          client_name: clientName.trim(),
+          special_instructions: loadNotes.trim() || null,
           status: "dispatched",
         })
         .select()
@@ -580,6 +588,18 @@ export default function DispatchPage() {
               />
             </div>
             <div>
+              <Label>Client Company Name *</Label>
+              <Input
+                value={clientName}
+                onChange={(e) => setClientName(e.target.value)}
+                placeholder="Name of the client company (broker/shipper)"
+                required
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                The company that hired NFG for this logistics service
+              </p>
+            </div>
+            <div>
               <Label>Rate ($) *</Label>
               <Input
                 type="number"
@@ -589,6 +609,14 @@ export default function DispatchPage() {
                 onChange={(e) => setRate(e.target.value)}
                 placeholder="0.00"
                 required
+              />
+            </div>
+            <div>
+              <Label>Note (Optional)</Label>
+              <Input
+                value={loadNotes}
+                onChange={(e) => setLoadNotes(e.target.value)}
+                placeholder="Any additional notes for the driver schedule"
               />
             </div>
             <div>
