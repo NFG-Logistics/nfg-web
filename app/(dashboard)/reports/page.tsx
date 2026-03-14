@@ -121,7 +121,7 @@ export default function ReportsPage() {
   const activeLoads = useMemo(
     () =>
       loads.filter(
-        (l) => !["delivered", "cancelled"].includes(l.status)
+        (l) => !["delivered", "cancelled", "declined"].includes(l.status)
       ),
     [loads]
   );

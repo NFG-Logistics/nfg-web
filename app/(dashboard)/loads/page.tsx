@@ -74,6 +74,7 @@ import type {
 // Active statuses (everything except delivered/cancelled)
 // ---------------------------------------------------------------------------
 const ACTIVE_STATUSES: LoadStatus[] = [
+  "pending_acceptance",
   "dispatched",
   "on_site_shipper",
   "loaded",
@@ -254,7 +255,7 @@ export default function LoadsPage() {
     [loads]
   );
   const cancelledLoads = useMemo(
-    () => loads.filter((l) => l.status === "cancelled"),
+    () => loads.filter((l) => l.status === "cancelled" || l.status === "declined"),
     [loads]
   );
 
@@ -707,7 +708,7 @@ function LoadsTable({
                       </Button>
                       {tab === "active" &&
                         onCancel &&
-                        !["delivered", "cancelled"].includes(load.status) && (
+                        !["delivered", "cancelled", "declined"].includes(load.status) && (
                           <Button
                             variant="ghost"
                             size="icon"

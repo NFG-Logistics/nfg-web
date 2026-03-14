@@ -53,7 +53,7 @@ export default function FleetPage() {
       const { data: activeLoads } = await supabase
         .from("loads")
         .select("id, reference_number, status, truck_id, trailer_id")
-        .not("status", "in", '("delivered","cancelled")');
+        .not("status", "in", '("delivered","cancelled","declined")');
 
       const loadMap = new Map((activeLoads || []).map((l) => [l.id, l]));
 

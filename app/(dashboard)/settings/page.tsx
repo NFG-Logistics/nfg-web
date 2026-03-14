@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useUser } from "@/hooks/use-user";
-import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,21 +16,94 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
-import { Plus, Pencil, Trash2, Search, Loader2, Shield, UserCog, Truck, User, Settings as SettingsIcon } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Search,
+  Loader2,
+  Shield,
+  UserCog,
+  Truck,
+  User,
+  Settings as SettingsIcon,
+  Bell,
+  FileText,
+  Wrench,
+  Send,
+  Save,
+} from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import type { User as UserType, UserRole } from "@/types";
 
-const ROLE_CONFIG: Record<UserRole, { label: string; icon: typeof Shield; variant: "default" | "secondary" | "info" | "warning" | "success" }> = {
+const ROLE_CONFIG: Record<
+  UserRole,
+  {
+    label: string;
+    icon: typeof Shield;
+    variant: "default" | "secondary" | "info" | "warning" | "success";
+  }
+> = {
   admin: { label: "Admin", icon: Shield, variant: "default" },
   dispatcher: { label: "Dispatcher", icon: UserCog, variant: "info" },
   driver: { label: "Driver", icon: Truck, variant: "warning" },
 };
 
+// ─── Types for system preferences ──────────────────────────────────────────
+
+interface DispatchSettings {
+  require_driver_acceptance: boolean;
+  default_load_status: string;
+  auto_set_driver_unavailable: boolean;
+}
+
+interface NotificationSettings {
+  enable_push_notifications: boolean;
+  enable_in_app_notifications: boolean;
+  dispatch_notification_template: string;
+}
+
+interface DocumentSettings {
+  require_pod_before_completion: boolean;
+  require_receipt_image_upload: boolean;
+}
+
+interface FleetSettings {
+  enable_maintenance_tracking: boolean;
+  require_truck_for_road_service: boolean;
+}
+
+const DEFAULT_DISPATCH: DispatchSettings = {
+  require_driver_acceptance: true,
+  default_load_status: "pending_acceptance",
+  auto_set_driver_unavailable: true,
+};
+
+const DEFAULT_NOTIFICATION: NotificationSettings = {
+  enable_push_notifications: true,
+  enable_in_app_notifications: true,
+  dispatch_notification_template:
+    "You have been assigned a new load. Please review and accept or decline.",
+};
+
+const DEFAULT_DOCUMENT: DocumentSettings = {
+  require_pod_before_completion: true,
+  require_receipt_image_upload: true,
+};
+
+const DEFAULT_FLEET: FleetSettings = {
+  enable_maintenance_tracking: true,
+  require_truck_for_road_service: true,
+};
+
+// ─── Page ──────────────────────────────────────────────────────────────────
+
 export default function SettingsPage() {
   const supabase = createClient();
   const { user: currentUser, loading: userLoading } = useUser();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") || "profile";
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -52,6 +124,16 @@ export default function SettingsPage() {
   const [profilePhone, setProfilePhone] = useState("");
   const [profileSaving, setProfileSaving] = useState(false);
 
+  // System Preferences state
+  const [prefsLoading, setPrefsLoading] = useState(true);
+  const [prefsSaving, setPrefsSaving] = useState(false);
+  const [dispatch, setDispatch] = useState<DispatchSettings>(DEFAULT_DISPATCH);
+  const [notification, setNotification] = useState<NotificationSettings>(DEFAULT_NOTIFICATION);
+  const [document, setDocument] = useState<DocumentSettings>(DEFAULT_DOCUMENT);
+  const [fleet, setFleet] = useState<FleetSettings>(DEFAULT_FLEET);
+
+  // ─── Redirect non-admin from users tab ─────────────────────────────────
+
   useEffect(() => {
     if (!userLoading && currentUser?.role !== "admin" && activeTab === "users") {
       setActiveTab("profile");
@@ -66,7 +148,9 @@ export default function SettingsPage() {
     }
   }, [currentUser]);
 
-  const fetchUsers = async () => {
+  // ─── User Management ───────────────────────────────────────────────────
+
+  const fetchUsers = useCallback(async () => {
     if (currentUser?.role !== "admin") return;
     try {
       const { data, error } = await supabase.from("users").select("*").order("full_name");
@@ -77,13 +161,13 @@ export default function SettingsPage() {
     } finally {
       setUsersLoading(false);
     }
-  };
+  }, [currentUser, supabase]);
 
   useEffect(() => {
     if (currentUser?.role === "admin" && activeTab === "users") {
       fetchUsers();
     }
-  }, [currentUser, activeTab]);
+  }, [currentUser, activeTab, fetchUsers]);
 
   const filteredUsers = users.filter((u) => {
     const matchesSearch =
@@ -104,7 +188,7 @@ export default function SettingsPage() {
         .update({
           full_name: fd.get("full_name") as string,
           email: fd.get("email") as string,
-          phone: fd.get("phone") as string || null,
+          phone: (fd.get("phone") as string) || null,
           role: selectedRole,
           is_active: fd.get("is_active") === "true",
         })
@@ -119,14 +203,12 @@ export default function SettingsPage() {
       const email = fd.get("email") as string;
       const password = fd.get("password") as string;
       const fullName = fd.get("full_name") as string;
-      const phone = fd.get("phone") as string || null;
+      const phone = (fd.get("phone") as string) || null;
 
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email,
         password,
-        options: {
-          data: { full_name: fullName },
-        },
+        options: { data: { full_name: fullName } },
       });
 
       if (authError) {
@@ -170,12 +252,8 @@ export default function SettingsPage() {
     try {
       const { error } = await supabase
         .from("users")
-        .update({
-          full_name: profileName,
-          phone: profilePhone || null,
-        })
+        .update({ full_name: profileName, phone: profilePhone || null })
         .eq("id", currentUser.id);
-
       if (error) throw error;
       toast.success("Profile updated");
     } catch (err: any) {
@@ -219,6 +297,78 @@ export default function SettingsPage() {
     setUserDialogOpen(true);
   };
 
+  // ─── System Preferences ────────────────────────────────────────────────
+
+  const fetchPreferences = useCallback(async () => {
+    setPrefsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("system_preferences")
+        .select("key, value");
+
+      if (error) {
+        console.error("Failed to fetch preferences:", error);
+        return;
+      }
+
+      for (const row of data || []) {
+        const val = typeof row.value === "string" ? JSON.parse(row.value) : row.value;
+        switch (row.key) {
+          case "dispatch_settings":
+            setDispatch({ ...DEFAULT_DISPATCH, ...val });
+            break;
+          case "notification_settings":
+            setNotification({ ...DEFAULT_NOTIFICATION, ...val });
+            break;
+          case "document_settings":
+            setDocument({ ...DEFAULT_DOCUMENT, ...val });
+            break;
+          case "fleet_settings":
+            setFleet({ ...DEFAULT_FLEET, ...val });
+            break;
+        }
+      }
+    } catch (err) {
+      console.error("Preferences fetch exception:", err);
+    } finally {
+      setPrefsLoading(false);
+    }
+  }, [supabase]);
+
+  useEffect(() => {
+    if (activeTab === "system") {
+      fetchPreferences();
+    }
+  }, [activeTab, fetchPreferences]);
+
+  const savePreferences = async () => {
+    setPrefsSaving(true);
+    try {
+      const upserts = [
+        { key: "dispatch_settings", value: dispatch },
+        { key: "notification_settings", value: notification },
+        { key: "document_settings", value: document },
+        { key: "fleet_settings", value: fleet },
+      ];
+
+      for (const row of upserts) {
+        const { error } = await supabase
+          .from("system_preferences")
+          .upsert({ key: row.key, value: row.value }, { onConflict: "key" });
+
+        if (error) throw error;
+      }
+
+      toast.success("System preferences saved");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save preferences");
+    } finally {
+      setPrefsSaving(false);
+    }
+  };
+
+  // ─── Render ─────────────────────────────────────────────────────────────
+
   if (userLoading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -233,6 +383,8 @@ export default function SettingsPage() {
     driver: users.filter((u) => u.role === "driver").length,
   };
 
+  const isAdmin = currentUser?.role === "admin";
+
   return (
     <div className="space-y-6">
       <PageHeader title="Settings" description="Manage your account and system preferences" />
@@ -243,32 +395,39 @@ export default function SettingsPage() {
             <User className="mr-2 h-4 w-4" />
             Profile
           </TabsTrigger>
-          {currentUser?.role === "admin" && (
+          {isAdmin && (
             <TabsTrigger value="users">
               <Shield className="mr-2 h-4 w-4" />
               User Management
             </TabsTrigger>
           )}
-          <TabsTrigger value="system">
-            <SettingsIcon className="mr-2 h-4 w-4" />
-            System Preferences
-          </TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="system">
+              <SettingsIcon className="mr-2 h-4 w-4" />
+              System Preferences
+            </TabsTrigger>
+          )}
         </TabsList>
 
-        {/* Profile Tab */}
+        {/* ─── Profile Tab ─────────────────────────────────────────────── */}
         <TabsContent value="profile">
           <Card>
             <CardHeader>
               <CardTitle>Profile</CardTitle>
               <CardDescription>
-                {currentUser?.role === "admin" ? "Update your profile information." : "View your profile information."}
+                {isAdmin ? "Update your profile information." : "View your profile information."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center gap-4 pb-4">
                 <Avatar className="h-16 w-16">
                   <AvatarFallback className="bg-primary/10 text-primary text-lg font-semibold">
-                    {currentUser?.full_name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)}
+                    {currentUser?.full_name
+                      .split(" ")
+                      .map((n) => n[0])
+                      .join("")
+                      .toUpperCase()
+                      .slice(0, 2)}
                   </AvatarFallback>
                 </Avatar>
                 <div>
@@ -286,7 +445,7 @@ export default function SettingsPage() {
                   <Input
                     value={profileName}
                     onChange={(e) => setProfileName(e.target.value)}
-                    disabled={currentUser?.role !== "admin"}
+                    disabled={!isAdmin}
                   />
                 </div>
                 <div className="space-y-2">
@@ -299,11 +458,11 @@ export default function SettingsPage() {
                   <Input
                     value={profilePhone}
                     onChange={(e) => setProfilePhone(e.target.value)}
-                    disabled={currentUser?.role !== "admin"}
+                    disabled={!isAdmin}
                   />
                 </div>
               </div>
-              {currentUser?.role === "admin" && (
+              {isAdmin && (
                 <div className="flex justify-end pt-4">
                   <Button onClick={handleProfileSave} disabled={profileSaving}>
                     {profileSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -315,15 +474,16 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
 
-        {/* User Management Tab (Admin only) */}
-        {currentUser?.role === "admin" && (
+        {/* ─── User Management Tab (Admin only) ─────────────────────── */}
+        {isAdmin && (
           <TabsContent value="users">
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-semibold">User Management</h3>
                   <p className="text-sm text-muted-foreground">
-                    {users.length} users · {userCounts.admin} admins · {userCounts.dispatcher} dispatchers · {userCounts.driver} drivers
+                    {users.length} users · {userCounts.admin} admins · {userCounts.dispatcher}{" "}
+                    dispatchers · {userCounts.driver} drivers
                   </p>
                 </div>
                 <Button onClick={openCreate}>
@@ -377,14 +537,21 @@ export default function SettingsPage() {
                       </TableHeader>
                       <TableBody>
                         {filteredUsers.map((u) => {
-                          const initials = u.full_name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
+                          const initials = u.full_name
+                            .split(" ")
+                            .map((n) => n[0])
+                            .join("")
+                            .toUpperCase()
+                            .slice(0, 2);
                           const roleCfg = ROLE_CONFIG[u.role];
                           return (
                             <TableRow key={u.id}>
                               <TableCell>
                                 <div className="flex items-center gap-3">
                                   <Avatar className="h-8 w-8">
-                                    <AvatarFallback className="text-xs bg-primary/10 text-primary">{initials}</AvatarFallback>
+                                    <AvatarFallback className="text-xs bg-primary/10 text-primary">
+                                      {initials}
+                                    </AvatarFallback>
                                   </Avatar>
                                   <span className="font-medium">{u.full_name}</span>
                                 </div>
@@ -426,7 +593,13 @@ export default function SettingsPage() {
               </Card>
 
               {/* Create/Edit User Dialog */}
-              <Dialog open={userDialogOpen} onOpenChange={(o) => { setUserDialogOpen(o); if (!o) setEditUser(null); }}>
+              <Dialog
+                open={userDialogOpen}
+                onOpenChange={(o) => {
+                  setUserDialogOpen(o);
+                  if (!o) setEditUser(null);
+                }}
+              >
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>{editUser ? "Edit User" : "Create New User"}</DialogTitle>
@@ -494,18 +667,260 @@ export default function SettingsPage() {
           </TabsContent>
         )}
 
-        {/* System Preferences Tab */}
-        <TabsContent value="system">
-          <Card>
-            <CardHeader>
-              <CardTitle>System Preferences</CardTitle>
-              <CardDescription>Configure system-wide settings and preferences</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">System preferences coming soon...</p>
-            </CardContent>
-          </Card>
-        </TabsContent>
+        {/* ─── System Preferences Tab (Admin only) ─────────────────── */}
+        {isAdmin && (
+          <TabsContent value="system">
+            {prefsLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Dispatch Settings */}
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center gap-2">
+                      <Send className="h-5 w-5 text-primary" />
+                      <div>
+                        <CardTitle className="text-base">Dispatch Settings</CardTitle>
+                        <CardDescription>Configure how loads are dispatched to drivers</CardDescription>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label className="text-sm font-medium">Require Driver Acceptance</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Drivers must accept or decline dispatched loads before they become active
+                        </p>
+                      </div>
+                      <Switch
+                        checked={dispatch.require_driver_acceptance}
+                        onCheckedChange={(v) =>
+                          setDispatch((prev) => ({ ...prev, require_driver_acceptance: v }))
+                        }
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label className="text-sm font-medium">Default Load Status</Label>
+                        <p className="text-xs text-muted-foreground">
+                          The status assigned to a newly dispatched load
+                        </p>
+                      </div>
+                      <Select
+                        value={dispatch.default_load_status}
+                        onValueChange={(v) =>
+                          setDispatch((prev) => ({ ...prev, default_load_status: v }))
+                        }
+                      >
+                        <SelectTrigger className="w-[200px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="pending_acceptance">Pending Acceptance</SelectItem>
+                          <SelectItem value="dispatched">Dispatched</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label className="text-sm font-medium">
+                          Auto Set Driver Unavailable When Dispatched
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          Automatically mark the driver as unavailable when assigned a load
+                        </p>
+                      </div>
+                      <Switch
+                        checked={dispatch.auto_set_driver_unavailable}
+                        onCheckedChange={(v) =>
+                          setDispatch((prev) => ({ ...prev, auto_set_driver_unavailable: v }))
+                        }
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Notification Settings */}
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center gap-2">
+                      <Bell className="h-5 w-5 text-primary" />
+                      <div>
+                        <CardTitle className="text-base">Notification Settings</CardTitle>
+                        <CardDescription>Manage how notifications are sent to users</CardDescription>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label className="text-sm font-medium">Enable Push Notifications</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Send push notifications to drivers via Firebase Cloud Messaging
+                        </p>
+                      </div>
+                      <Switch
+                        checked={notification.enable_push_notifications}
+                        onCheckedChange={(v) =>
+                          setNotification((prev) => ({ ...prev, enable_push_notifications: v }))
+                        }
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label className="text-sm font-medium">Enable In-App Notifications</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Show notifications inside the application&apos;s notification center
+                        </p>
+                      </div>
+                      <Switch
+                        checked={notification.enable_in_app_notifications}
+                        onCheckedChange={(v) =>
+                          setNotification((prev) => ({
+                            ...prev,
+                            enable_in_app_notifications: v,
+                          }))
+                        }
+                      />
+                    </div>
+                    <Separator />
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">Dispatch Notification Template</Label>
+                      <p className="text-xs text-muted-foreground">
+                        The message body sent to drivers when a new load is dispatched
+                      </p>
+                      <Textarea
+                        value={notification.dispatch_notification_template}
+                        onChange={(e) =>
+                          setNotification((prev) => ({
+                            ...prev,
+                            dispatch_notification_template: e.target.value,
+                          }))
+                        }
+                        rows={3}
+                        className="mt-1"
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Document Settings */}
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center gap-2">
+                      <FileText className="h-5 w-5 text-primary" />
+                      <div>
+                        <CardTitle className="text-base">Document Settings</CardTitle>
+                        <CardDescription>
+                          Control document requirements for loads and receipts
+                        </CardDescription>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label className="text-sm font-medium">
+                          Require POD Before Load Completion
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          Drivers must upload a Proof of Delivery before marking a load as empty
+                        </p>
+                      </div>
+                      <Switch
+                        checked={document.require_pod_before_completion}
+                        onCheckedChange={(v) =>
+                          setDocument((prev) => ({ ...prev, require_pod_before_completion: v }))
+                        }
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label className="text-sm font-medium">Require Receipt Image Upload</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Require an image attachment when submitting expense receipts
+                        </p>
+                      </div>
+                      <Switch
+                        checked={document.require_receipt_image_upload}
+                        onCheckedChange={(v) =>
+                          setDocument((prev) => ({ ...prev, require_receipt_image_upload: v }))
+                        }
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Fleet Settings */}
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center gap-2">
+                      <Wrench className="h-5 w-5 text-primary" />
+                      <div>
+                        <CardTitle className="text-base">Fleet Settings</CardTitle>
+                        <CardDescription>
+                          Configure fleet management and maintenance options
+                        </CardDescription>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-5">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label className="text-sm font-medium">Enable Maintenance Tracking</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Track and manage truck/trailer maintenance schedules and status
+                        </p>
+                      </div>
+                      <Switch
+                        checked={fleet.enable_maintenance_tracking}
+                        onCheckedChange={(v) =>
+                          setFleet((prev) => ({ ...prev, enable_maintenance_tracking: v }))
+                        }
+                      />
+                    </div>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label className="text-sm font-medium">
+                          Require Truck for Road Service Receipts
+                        </Label>
+                        <p className="text-xs text-muted-foreground">
+                          Road service receipts must specify which truck the service was for
+                        </p>
+                      </div>
+                      <Switch
+                        checked={fleet.require_truck_for_road_service}
+                        onCheckedChange={(v) =>
+                          setFleet((prev) => ({ ...prev, require_truck_for_road_service: v }))
+                        }
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Save Button */}
+                <div className="flex justify-end">
+                  <Button onClick={savePreferences} disabled={prefsSaving} size="lg">
+                    {prefsSaving ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="mr-2 h-4 w-4" />
+                    )}
+                    Save All Preferences
+                  </Button>
+                </div>
+              </div>
+            )}
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

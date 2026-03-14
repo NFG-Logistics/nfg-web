@@ -7,12 +7,14 @@
 export type UserRole = "admin" | "dispatcher" | "driver";
 
 export type LoadStatus =
+  | "pending_acceptance"
   | "dispatched"
   | "on_site_shipper"
   | "loaded"
   | "on_site_receiver"
   | "empty"
   | "delivered"
+  | "declined"
   | "cancelled";
 
 export type StopType = "pickup" | "delivery";
@@ -119,7 +121,10 @@ export interface Load {
   reviewed_at?: string;
   dispatched_at: string;
   completed_at?: string;
+  accepted_at?: string;
+  declined_at?: string;
   cancelled_at?: string;
+  rate_confirmation_path?: string;
   created_at: string;
   updated_at: string;
 }

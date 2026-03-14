@@ -266,7 +266,7 @@ export default function DispatchPage() {
         };
       });
 
-      // Create load
+      // Create load with pending_acceptance status
       const { data: load, error: loadError } = await supabase
         .from("loads")
         .insert({
@@ -277,7 +277,7 @@ export default function DispatchPage() {
           rate: Number(rate),
           client_name: clientName.trim(),
           special_instructions: loadNotes.trim() || null,
-          status: "dispatched",
+          status: "pending_acceptance",
         })
         .select()
         .single();
@@ -286,6 +286,28 @@ export default function DispatchPage() {
         toast.error(`Failed to create load: ${loadError.message}`);
         setSubmitting(false);
         return;
+      }
+
+      // Upload rate confirmation file if provided
+      if (rateConfirmation && load) {
+        try {
+          const ext = rateConfirmation.name.split(".").pop() || "pdf";
+          const storagePath = `${load.id}/${Date.now()}.${ext}`;
+          const { error: uploadError } = await supabase.storage
+            .from("rate-confirmations")
+            .upload(storagePath, rateConfirmation);
+
+          if (!uploadError) {
+            await supabase
+              .from("loads")
+              .update({ rate_confirmation_path: storagePath })
+              .eq("id", load.id);
+          } else {
+            console.warn("Rate confirmation upload failed:", uploadError.message);
+          }
+        } catch (err) {
+          console.warn("Rate confirmation upload error:", err);
+        }
       }
 
       // Insert stops
@@ -306,9 +328,9 @@ export default function DispatchPage() {
       await supabase.from("status_updates").insert({
         load_id: load.id,
         previous_status: null,
-        new_status: "dispatched",
+        new_status: "pending_acceptance",
         changed_by: user?.id,
-        notes: "Load created and dispatched",
+        notes: "Load created — awaiting driver acceptance",
       });
 
       // Send notification to driver
@@ -323,7 +345,13 @@ export default function DispatchPage() {
         });
       }
 
-      toast.success(`Load ${loadNumber} dispatched successfully`);
+      // Update driver to unavailable (best-effort)
+      await supabase
+        .from("users")
+        .update({ availability_status: "unavailable" })
+        .eq("id", selectedDriver);
+
+      toast.success(`Load ${loadNumber} dispatched successfully — awaiting driver acceptance`);
       router.push("/loads");
     } catch (err) {
       toast.error(`Error: ${(err as Error).message}`);

@@ -37,7 +37,7 @@ export default async function DashboardPage() {
 
     // Fetch KPIs in parallel
     const [loadsRes, driversRes, receiptsRes, revenueRes] = await Promise.all([
-      supabase.from("loads").select("id", { count: "exact", head: true }).not("status", "in", '("delivered","cancelled")'),
+      supabase.from("loads").select("id", { count: "exact", head: true }).not("status", "in", '("delivered","cancelled","declined")'),
       supabase.from("users").select("id, availability_status").eq("role", "driver").eq("is_active", true),
       supabase
         .from("receipts")
