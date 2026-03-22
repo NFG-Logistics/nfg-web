@@ -35,8 +35,6 @@ import {
   User as UserIcon,
   Package,
   ArrowRight,
-  AlertTriangle,
-  FileText,
   Loader2,
   ExternalLink,
 } from "lucide-react";
@@ -80,6 +78,7 @@ const STATUS_TIMELINE_COLORS: Record<string, string> = {
   loaded: "bg-indigo-500",
   on_site_receiver: "bg-amber-500",
   empty: "bg-slate-500",
+  retake_requested: "bg-amber-600",
   delivered: "bg-emerald-500",
   cancelled: "bg-red-500",
 };
@@ -173,27 +172,62 @@ export function ReviewModal({ load, open, onClose, onDone }: ReviewModalProps) {
           }).then(() => {});
         }
       } else if (action === "retake") {
-        // Request POD retake — load stays in 'empty'
-        const { error } = await supabase
-          .from("loads")
-          .update({
-            review_feedback: feedback.trim(),
-            reviewed_by: authUser.id,
-            reviewed_at: new Date().toISOString(),
-          })
-          .eq("id", load.id);
+        // Prefer edge function, but keep a web fallback so the button works
+        // even before function deployment.
+        const { data, error } = await supabase.functions.invoke("request-retake", {
+          body: {
+            load_id: load.id,
+            feedback: feedback.trim(),
+          },
+        });
 
-        if (error) throw new Error(error.message);
+        if (error || data?.error) {
+          let appliedRetakeStatus = true;
+          const { error: updateErr } = await supabase
+            .from("loads")
+            .update({
+              status: "retake_requested",
+              review_feedback: feedback.trim(),
+              reviewed_by: authUser.id,
+              reviewed_at: new Date().toISOString(),
+            })
+            .eq("id", load.id);
 
-        // Notify driver (best-effort)
-        if (load.driver_id) {
-          await supabase.from("notifications").insert({
-            user_id: load.driver_id,
-            title: "POD Retake Requested",
-            body: `Load ${load.reference_number}: ${feedback.trim()}`,
-            type: "pod_retake",
-            data: { load_id: load.id },
-          }).then(() => {});
+          if (updateErr) {
+            // If enum/migration isn't present yet, keep old status and still send feedback.
+            if (updateErr.message.includes("invalid input value for enum")) {
+              appliedRetakeStatus = false;
+              const { error: legacyErr } = await supabase
+                .from("loads")
+                .update({
+                  review_feedback: feedback.trim(),
+                  reviewed_by: authUser.id,
+                  reviewed_at: new Date().toISOString(),
+                })
+                .eq("id", load.id);
+              if (legacyErr) throw new Error(legacyErr.message);
+            } else {
+              throw new Error(updateErr.message);
+            }
+          }
+
+          await supabase.from("status_updates").insert({
+            load_id: load.id,
+            previous_status: "empty",
+            new_status: appliedRetakeStatus ? "retake_requested" : "empty",
+            changed_by: authUser.id,
+            notes: feedback.trim(),
+          });
+
+          if (load.driver_id) {
+            await supabase.from("notifications").insert({
+              user_id: load.driver_id,
+              title: "Retake POD Required",
+              body: "Please re-upload proof of delivery",
+              type: "pod_retake",
+              data: { load_id: load.id, reference_number: load.reference_number },
+            });
+          }
         }
       }
 
@@ -348,45 +382,29 @@ export function ReviewModal({ load, open, onClose, onDone }: ReviewModalProps) {
                   <p className="text-sm">No POD uploaded yet</p>
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div className="grid gap-3 sm:grid-cols-2">
                   {receipts.map((r) => (
                     <div
                       key={r.id}
-                      className="flex items-center justify-between rounded-lg border bg-white p-3 dark:bg-card"
+                      className="overflow-hidden rounded-lg border bg-white dark:bg-card"
                     >
-                      <div className="flex items-center gap-3">
-                        {r.no_pod_available ? (
-                          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-amber-100 dark:bg-amber-900/30">
-                            <AlertTriangle className="h-5 w-5 text-amber-600" />
-                          </div>
-                        ) : (
-                          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-blue-100 dark:bg-blue-900/30">
-                            <FileText className="h-5 w-5 text-blue-600" />
-                          </div>
-                        )}
-                        <div>
-                          <p className="text-sm font-medium">
-                            {r.no_pod_available
-                              ? "No POD Available (flagged by driver)"
-                              : r.file_name ?? "POD Document"}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {r.signed_by && `Signed by: ${r.signed_by} · `}
-                            {fmtDate(r.created_at)}
-                          </p>
-                          {r.notes && (
-                            <p className="text-xs text-muted-foreground italic mt-0.5">{r.notes}</p>
-                          )}
+                      {r.file_url ? (
+                        <img src={r.file_url} alt="POD" className="h-44 w-full object-cover" />
+                      ) : (
+                        <div className="flex h-44 w-full items-center justify-center bg-muted">
+                          <FileImage className="h-8 w-8 text-muted-foreground" />
                         </div>
-                      </div>
-                      {r.file_url && (
-                        <Button variant="ghost" size="sm" asChild>
-                          <a href={r.file_url} target="_blank" rel="noopener noreferrer" className="gap-1.5">
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            View
-                          </a>
-                        </Button>
                       )}
+                      <div className="flex justify-end p-2">
+                        {r.file_url && (
+                          <Button variant="ghost" size="sm" asChild>
+                            <a href={r.file_url} target="_blank" rel="noopener noreferrer" className="gap-1.5">
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              View
+                            </a>
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

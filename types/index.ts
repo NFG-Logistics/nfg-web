@@ -13,6 +13,7 @@ export type LoadStatus =
   | "loaded"
   | "on_site_receiver"
   | "empty"
+  | "retake_requested"
   | "delivered"
   | "declined"
   | "cancelled";

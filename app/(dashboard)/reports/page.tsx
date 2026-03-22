@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useUser } from "@/hooks/use-user";
 import { useRouter } from "next/navigation";
@@ -27,7 +27,10 @@ import {
   Percent,
   Users2,
   Trophy,
+  Download,
 } from "lucide-react";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 import {
   BarChart,
   Bar,
@@ -41,7 +44,7 @@ import {
   Cell,
   Legend,
 } from "recharts";
-import type { Load, LoadStatus, User as UserType } from "@/types";
+import type { Load, LoadStatus, Stop, Truck, Trailer, User as UserType } from "@/types";
 
 const CHART_COLORS = [
   "#3b82f6",
@@ -59,10 +62,12 @@ export default function ReportsPage() {
   const router = useRouter();
   const [loads, setLoads] = useState<Load[]>([]);
   const [drivers, setDrivers] = useState<UserType[]>([]);
-  const [topRoutes, setTopRoutes] = useState<any[]>([]);
-  const [fleetStatus, setFleetStatus] = useState<any>(null);
+  const [stops, setStops] = useState<Stop[]>([]);
+  const [trucks, setTrucks] = useState<Truck[]>([]);
+  const [trailers, setTrailers] = useState<Trailer[]>([]);
   const [revenuePeriod, setRevenuePeriod] = useState<"day" | "week" | "month" | "year">("month");
   const [loading, setLoading] = useState(true);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!userLoading && user?.role !== "admin") {
@@ -71,7 +76,7 @@ export default function ReportsPage() {
     }
     async function fetchReportData() {
       try {
-        const [loadsRes, driversRes, routesRes, fleetRes] = await Promise.all([
+        const [loadsRes, driversRes, stopsRes, trucksRes, trailersRes] = await Promise.all([
           supabase
             .from("loads")
             .select("*")
@@ -82,23 +87,20 @@ export default function ReportsPage() {
             .eq("role", "driver")
             .eq("is_active", true)
             .order("full_name"),
-          supabase
-            .from("top_routes_view")
-            .select("*")
-            .limit(3),
-          supabase
-            .from("fleet_status_view")
-            .select("*")
-            .single(),
+          supabase.from("stops").select("*"),
+          supabase.from("trucks").select("*").eq("is_active", true),
+          supabase.from("trailers").select("*").eq("is_active", true),
         ]);
         if (loadsRes.error) console.error("Reports: loads error", loadsRes.error);
         if (driversRes.error) console.error("Reports: drivers error", driversRes.error);
-        if (routesRes.error) console.error("Reports: routes error", routesRes.error);
-        if (fleetRes.error) console.error("Reports: fleet error", fleetRes.error);
+        if (stopsRes.error) console.error("Reports: stops error", stopsRes.error);
+        if (trucksRes.error) console.error("Reports: trucks error", trucksRes.error);
+        if (trailersRes.error) console.error("Reports: trailers error", trailersRes.error);
         setLoads(loadsRes.data || []);
         setDrivers(driversRes.data || []);
-        setTopRoutes(routesRes.data || []);
-        setFleetStatus(fleetRes.data || null);
+        setStops(stopsRes.data || []);
+        setTrucks(trucksRes.data || []);
+        setTrailers(trailersRes.data || []);
       } catch (err) {
         console.error("Reports fetch exception:", err);
       } finally {
@@ -109,6 +111,10 @@ export default function ReportsPage() {
   }, [user, userLoading, supabase, router]);
 
   // ── Derived data ────────────────────────────────────────────────────
+  const inUseStatuses = useMemo(
+    () => new Set<LoadStatus>(["pending_acceptance", "dispatched", "on_site_shipper", "loaded", "on_site_receiver", "empty", "retake_requested"] as LoadStatus[]),
+    []
+  );
   // Revenue = ONLY loads where status = delivered
   const deliveredLoads = useMemo(
     () => loads.filter((l) => l.status === "delivered"),
@@ -125,6 +131,71 @@ export default function ReportsPage() {
       ),
     [loads]
   );
+
+  const fleetStatus = useMemo(() => {
+    const activeByTruck = new Set(
+      loads.filter((l) => l.truck_id && !["delivered", "cancelled"].includes(l.status)).map((l) => l.truck_id as string)
+    );
+    const activeByTrailer = new Set(
+      loads.filter((l) => l.trailer_id && !["delivered", "cancelled"].includes(l.status)).map((l) => l.trailer_id as string)
+    );
+
+    const totalTrucks = trucks.length;
+    const trucksInService = trucks.filter((t) => t.maintenance_status === "in_service").length;
+    const trucksInUse = trucks.filter((t) => activeByTruck.has(t.id)).length;
+    const availableTrucks = trucks.filter(
+      (t) => t.maintenance_status !== "in_service" && !activeByTruck.has(t.id)
+    ).length;
+
+    const totalTrailers = trailers.length;
+    const trailersInService = trailers.filter((t) => t.maintenance_status === "in_service").length;
+    const trailersInUse = trailers.filter((t) => activeByTrailer.has(t.id)).length;
+    const availableTrailers = trailers.filter(
+      (t) => t.maintenance_status !== "in_service" && !activeByTrailer.has(t.id)
+    ).length;
+
+    return {
+      total_trucks: totalTrucks,
+      available_trucks: availableTrucks,
+      in_use_trucks: trucksInUse,
+      in_service_trucks: trucksInService,
+      total_trailers: totalTrailers,
+      available_trailers: availableTrailers,
+      in_use_trailers: trailersInUse,
+      in_service_trailers: trailersInService,
+    };
+  }, [loads, trucks, trailers]);
+
+  const topRoutes = useMemo(() => {
+    const deliveredById = new Map(
+      deliveredLoads.map((l) => [l.id, l])
+    );
+    const grouped: Record<string, { route: string; delivered_count: number; total_revenue: number }> = {};
+
+    const stopsByLoad = stops.reduce<Record<string, Stop[]>>((acc, stop) => {
+      if (!acc[stop.load_id]) acc[stop.load_id] = [];
+      acc[stop.load_id].push(stop);
+      return acc;
+    }, {});
+
+    for (const [loadId, load] of deliveredById.entries()) {
+      const routeStops = (stopsByLoad[loadId] || []).slice().sort((a, b) => a.stop_order - b.stop_order);
+      const firstPickup = routeStops.find((s) => s.type === "pickup");
+      const lastDelivery = [...routeStops].reverse().find((s) => s.type === "delivery");
+      const route = firstPickup?.state && lastDelivery?.state ? `${firstPickup.state} - ${lastDelivery.state}` : null;
+      if (!route) continue;
+
+      if (!grouped[route]) {
+        grouped[route] = { route, delivered_count: 0, total_revenue: 0 };
+      }
+      grouped[route].delivered_count += 1;
+      grouped[route].total_revenue += load.rate || 0;
+    }
+
+    return Object.values(grouped)
+      .sort((a, b) => b.delivered_count - a.delivered_count)
+      .slice(0, 3);
+  }, [deliveredLoads, stops]);
 
   // Revenue from delivered loads only
   const totalRevenue = useMemo(
@@ -182,6 +253,41 @@ export default function ReportsPage() {
       value: count,
     }));
   }, [deliveredLoads]);
+
+  const inUseLoadCount = useMemo(
+    () => loads.filter((l) => inUseStatuses.has(l.status)).length,
+    [loads, inUseStatuses]
+  );
+
+  const handleExportPdf = async () => {
+    if (!exportRef.current) return;
+    const canvas = await html2canvas(exportRef.current, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#ffffff",
+    });
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF("p", "mm", "a4");
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imgWidth = pageWidth;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let position = 0;
+
+    pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+    heightLeft -= pageHeight;
+
+    while (heightLeft > 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+    }
+
+    const date = new Date().toISOString().slice(0, 10);
+    pdf.save(`nfg-reports-${date}.pdf`);
+  };
 
   // Revenue data by period — strictly using completed_at on delivered loads
   const revenueData = useMemo(() => {
@@ -314,7 +420,18 @@ export default function ReportsPage() {
         title="Reports"
         description="Financial and operational analytics (Admin only)"
       />
+      <div className="flex justify-end">
+        <button
+          onClick={handleExportPdf}
+          className="inline-flex items-center rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent"
+          type="button"
+        >
+          <Download className="mr-2 h-4 w-4" />
+          Export Reports
+        </button>
+      </div>
 
+      <div ref={exportRef} className="space-y-6 bg-white p-2">
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
@@ -697,6 +814,14 @@ export default function ReportsPage() {
                     </p>
                   </div>
                   <div className="p-4 border rounded-lg">
+                    <p className="text-sm text-muted-foreground">In-Use Trucks</p>
+                    <p className="text-2xl font-bold text-blue-600">{fleetStatus.in_use_trucks || 0}</p>
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <p className="text-sm text-muted-foreground">In-Service Trucks</p>
+                    <p className="text-2xl font-bold text-amber-600">{fleetStatus.in_service_trucks || 0}</p>
+                  </div>
+                  <div className="p-4 border rounded-lg">
                     <p className="text-sm text-muted-foreground">Total Trailers</p>
                     <p className="text-2xl font-bold">{fleetStatus.total_trailers || 0}</p>
                   </div>
@@ -705,6 +830,18 @@ export default function ReportsPage() {
                     <p className="text-2xl font-bold text-green-600">
                       {fleetStatus.available_trailers || 0}
                     </p>
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <p className="text-sm text-muted-foreground">In-Use Trailers</p>
+                    <p className="text-2xl font-bold text-blue-600">{fleetStatus.in_use_trailers || 0}</p>
+                  </div>
+                  <div className="p-4 border rounded-lg">
+                    <p className="text-sm text-muted-foreground">In-Service Trailers</p>
+                    <p className="text-2xl font-bold text-amber-600">{fleetStatus.in_service_trailers || 0}</p>
+                  </div>
+                  <div className="p-4 border rounded-lg sm:col-span-2 lg:col-span-4">
+                    <p className="text-sm text-muted-foreground">Active Loads Using Fleet</p>
+                    <p className="text-2xl font-bold">{inUseLoadCount}</p>
                   </div>
                 </div>
               )}
@@ -759,6 +896,7 @@ export default function ReportsPage() {
           </Card>
         </TabsContent>
       </Tabs>
+      </div>
     </div>
   );
 }

@@ -7,6 +7,7 @@ export const STATUS_CONFIG: Record<LoadStatus, { label: string; variant: "defaul
   loaded:           { label: "Loaded",             variant: "default" },
   on_site_receiver: { label: "On Site (Receiver)", variant: "warning" },
   empty:            { label: "Empty",              variant: "secondary" },
+  retake_requested: { label: "Retake Requested",   variant: "warning" },
   delivered:        { label: "Delivered",           variant: "success" },
   declined:         { label: "Declined",            variant: "destructive" },
   cancelled:        { label: "Cancelled",           variant: "destructive" },

@@ -44,6 +44,11 @@ interface Stop {
   notes?: string;
 }
 
+interface FleetOption {
+  id: string;
+  label: string;
+}
+
 export default function DispatchPage() {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -65,6 +70,10 @@ export default function DispatchPage() {
 
   // Section 3: Driver Selection
   const [selectedDriver, setSelectedDriver] = useState<string>("");
+  const [availableTrucks, setAvailableTrucks] = useState<FleetOption[]>([]);
+  const [availableTrailers, setAvailableTrailers] = useState<FleetOption[]>([]);
+  const [selectedTruck, setSelectedTruck] = useState<string>("");
+  const [selectedTrailer, setSelectedTrailer] = useState<string>("");
 
   useEffect(() => {
     async function fetchAvailableDrivers() {
@@ -85,6 +94,76 @@ export default function DispatchPage() {
     }
 
     fetchAvailableDrivers();
+  }, [supabase]);
+
+  useEffect(() => {
+    async function fetchAvailableFleet() {
+      const [
+        { data: trucks, error: trucksError },
+        { data: trailers, error: trailersError },
+        { data: activeLoads, error: activeLoadsError },
+      ] =
+        await Promise.all([
+          supabase
+            .from("trucks")
+            .select("id, truck_number, maintenance_status")
+            .eq("is_active", true)
+            .order("truck_number"),
+          supabase
+            .from("trailers")
+            .select("id, trailer_number, maintenance_status")
+            .eq("is_active", true)
+            .order("trailer_number"),
+          supabase
+            .from("loads")
+            .select("truck_id, trailer_id, status")
+            .not("status", "in", '("delivered","cancelled","declined")'),
+        ]);
+
+      if (trucksError) {
+        console.error("Failed to fetch trucks:", trucksError);
+      } else {
+        const inUseTruckIds = new Set(
+          (activeLoads || []).map((l: { truck_id?: string | null }) => l.truck_id).filter(Boolean)
+        );
+        const availableTruckRows = (trucks ?? []).filter(
+          (truck: { id: string; maintenance_status?: string | null }) =>
+            truck.maintenance_status !== "in_service" && !inUseTruckIds.has(truck.id)
+        );
+        setAvailableTrucks(
+          availableTruckRows.map((truck: { id: string; truck_number: string }) => ({
+            id: truck.id,
+            label: truck.truck_number,
+          }))
+        );
+      }
+
+      if (trailersError) {
+        console.error("Failed to fetch trailers:", trailersError);
+      } else {
+        const inUseTrailerIds = new Set(
+          (activeLoads || [])
+            .map((l: { trailer_id?: string | null }) => l.trailer_id)
+            .filter(Boolean)
+        );
+        const availableTrailerRows = (trailers ?? []).filter(
+          (trailer: { id: string; maintenance_status?: string | null }) =>
+            trailer.maintenance_status !== "in_service" && !inUseTrailerIds.has(trailer.id)
+        );
+        setAvailableTrailers(
+          availableTrailerRows.map((trailer: { id: string; trailer_number: string }) => ({
+            id: trailer.id,
+            label: trailer.trailer_number,
+          }))
+        );
+      }
+
+      if (activeLoadsError) {
+        console.error("Failed to fetch active loads for fleet filtering:", activeLoadsError);
+      }
+    }
+
+    fetchAvailableFleet();
   }, [supabase]);
 
   // Add default pickup stop
@@ -204,6 +283,14 @@ export default function DispatchPage() {
       toast.error("Please select a driver");
       return false;
     }
+    if (!selectedTruck) {
+      toast.error("Please select a truck");
+      return false;
+    }
+    if (!selectedTrailer) {
+      toast.error("Please select a trailer");
+      return false;
+    }
     return true;
   };
 
@@ -271,6 +358,8 @@ export default function DispatchPage() {
           company_id: user?.company_id,
           dispatcher_id: user?.id,
           driver_id: selectedDriver,
+          truck_id: selectedTruck,
+          trailer_id: selectedTrailer,
           reference_number: loadNumber,
           rate: Number(rate),
           client_name: clientName.trim(),
@@ -609,7 +698,7 @@ export default function DispatchPage() {
               <Input
                 value={loadNumber}
                 onChange={(e) => setLoadNumber(e.target.value)}
-                placeholder="e.g., LOAD-2024-001"
+                placeholder="e.g., 3856701"
                 required
               />
             </div>
@@ -715,6 +804,40 @@ export default function DispatchPage() {
                   </Card>
                 ))
               )}
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <Label htmlFor="truck-select">Truck *</Label>
+                <select
+                  id="truck-select"
+                  className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={selectedTruck}
+                  onChange={(e) => setSelectedTruck(e.target.value)}
+                >
+                  <option value="">Select available truck</option>
+                  {availableTrucks.map((truck) => (
+                    <option key={truck.id} value={truck.id}>
+                      {truck.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="trailer-select">Trailer *</Label>
+                <select
+                  id="trailer-select"
+                  className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={selectedTrailer}
+                  onChange={(e) => setSelectedTrailer(e.target.value)}
+                >
+                  <option value="">Select available trailer</option>
+                  {availableTrailers.map((trailer) => (
+                    <option key={trailer.id} value={trailer.id}>
+                      {trailer.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </CardContent>
         </Card>

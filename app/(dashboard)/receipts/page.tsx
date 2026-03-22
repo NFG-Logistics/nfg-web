@@ -179,7 +179,7 @@ export default function ReceiptsPage() {
                   <FileImage className="h-10 w-10 text-muted-foreground" />
                 )}
               </div>
-              <CardContent className="p-3">
+              {receipt.receipt_type === "pod" ? null : <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-semibold">
                     {receipt.uploaded_by_user?.full_name || "Unknown Driver"}
@@ -204,7 +204,7 @@ export default function ReceiptsPage() {
                 {receipt.notes && (
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{receipt.notes}</p>
                 )}
-              </CardContent>
+              </CardContent>}
             </Card>
           ))}
         </div>
@@ -224,7 +224,7 @@ export default function ReceiptsPage() {
                 </div>
               )}
 
-              <div className="space-y-2 text-sm">
+              {viewReceipt.receipt_type === "pod" ? null : <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Driver</span>
                   <span className="font-medium">{viewReceipt.uploaded_by_user?.full_name || "—"}</span>
@@ -259,7 +259,7 @@ export default function ReceiptsPage() {
                     <p className="mt-1 text-sm">{viewReceipt.notes}</p>
                   </div>
                 )}
-              </div>
+              </div>}
 
               {viewReceipt.file_url && (
                 <Button asChild variant="outline" className="w-full">
