@@ -1,6 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
-import type { User } from "@supabase/supabase-js";
-import { getSupabaseCookieOptions } from "@/lib/supabase/cookie-options";
+import type { SupabaseClient, User } from "@supabase/supabase-js";
+import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase/env";
 import { NextResponse, type NextRequest } from "next/server";
 
 function missingEnvResponse() {
@@ -8,8 +8,8 @@ function missingEnvResponse() {
     `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>Configuration required</title></head>
 <body style="font-family:system-ui,sans-serif;max-width:42rem;margin:3rem auto;padding:0 1rem;line-height:1.5">
 <h1 style="font-size:1.25rem">Supabase environment variables are missing</h1>
-<p>Add <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in the Vercel project
-<strong>Settings → Environment Variables</strong> for Production (and Preview if needed), then redeploy.</p>
+<p>Set <code>NEXT_PUBLIC_SUPABASE_URL</code> and a client key (<code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> or
+<code>NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY</code>) in Vercel → Environment Variables, then redeploy.</p>
 </body></html>`,
     {
       status: 503,
@@ -18,24 +18,42 @@ function missingEnvResponse() {
   );
 }
 
-export async function middleware(request: NextRequest) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+/**
+ * Resolve the signed-in user for routing. getUser() validates the JWT with Auth.
+ * If it returns no user (e.g. transient Edge/network issues), fall back to getSession()
+ * so a hard refresh does not false-negative to /login when cookies are still valid.
+ * Dashboard layout still calls getUser() on the server for a real check.
+ */
+async function getAuthUser(supabase: SupabaseClient): Promise<User | null> {
+  const {
+    data: { user: fromUser },
+  } = await supabase.auth.getUser();
 
-  if (!supabaseUrl?.trim() || !supabaseAnonKey?.trim()) {
+  if (fromUser) return fromUser;
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  return session?.user ?? null;
+}
+
+export async function middleware(request: NextRequest) {
+  const supabaseUrl = getSupabaseUrl();
+  const supabaseAnonKey = getSupabaseAnonKey();
+
+  if (!supabaseUrl || !supabaseAnonKey) {
     return missingEnvResponse();
   }
 
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
-    cookieOptions: getSupabaseCookieOptions(),
     cookies: {
       getAll() {
         return request.cookies.getAll();
       },
       setAll(cookiesToSet) {
-        // Do not swallow errors: silent failure here breaks session refresh on Vercel Edge.
         cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
         supabaseResponse = NextResponse.next({ request });
         cookiesToSet.forEach(({ name, value, options }) =>
@@ -45,15 +63,7 @@ export async function middleware(request: NextRequest) {
     },
   });
 
-  let user: User | null = null;
-  try {
-    const {
-      data: { user: u },
-    } = await supabase.auth.getUser();
-    user = u;
-  } catch (e) {
-    console.error("[middleware] supabase.auth.getUser failed:", e);
-  }
+  const user = await getAuthUser(supabase);
 
   const path = request.nextUrl.pathname;
   const isLoginPage = path === "/login";
