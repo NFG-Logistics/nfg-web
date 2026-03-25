@@ -1,16 +1,18 @@
 import { createBrowserClient } from "@supabase/ssr";
+import { getSupabaseCookieOptions } from "@/lib/supabase/cookie-options";
 
 export function createClient() {
   return createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
-      // 7-day session persistence: persist session and auto-refresh tokens
+      cookieOptions: getSupabaseCookieOptions(),
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        // Session will persist for 7 days (configured in Supabase dashboard)
-        // JWT expiry is set in backend Supabase project settings
+        // Avoid parsing non-existent OAuth/PKCE fragments on full reload — can clear
+        // cookie session in production (see Supabase SSR + Next.js refresh issues).
+        detectSessionInUrl: false,
       },
     }
   );

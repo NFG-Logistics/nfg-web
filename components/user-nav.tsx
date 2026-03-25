@@ -23,12 +23,16 @@ export function UserNav() {
     window.location.href = "/api/auth/signout";
   };
 
-  const initials = user?.full_name
-    ?.split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2) || "??";
+  const initials =
+    user?.full_name
+      ?.split(/\s+/)
+      .filter(Boolean)
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2) ||
+    user?.email?.slice(0, 2).toUpperCase() ||
+    "??";
 
   return (
     <DropdownMenu>

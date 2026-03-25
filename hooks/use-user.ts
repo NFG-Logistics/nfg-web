@@ -80,18 +80,28 @@ export function useUser() {
     // just because the JWT has expired – it refreshes first, then returns.
     async function init() {
       try {
+        // Prefer getUser() on first paint: it validates the JWT with Supabase Auth.
+        // getSession() reads only from storage; after a hard reload on Vercel, that
+        // can briefly disagree with server/middleware unless cookies are in sync.
         const {
-          data: { session },
+          data: { user: authUser },
           error,
-        } = await supabase.auth.getSession();
+        } = await supabase.auth.getUser();
 
-        if (error || !session) {
-          setUser(null);
-          setLoading(false);
+        if (error || !authUser) {
+          const {
+            data: { session },
+            error: sessionError,
+          } = await supabase.auth.getSession();
+          if (sessionError || !session) {
+            setUser(null);
+            return;
+          }
+          await loadProfile(supabase, session.user);
           return;
         }
 
-        await loadProfile(supabase, session.user);
+        await loadProfile(supabase, authUser);
       } catch (err) {
         console.error("useUser init error:", err);
         setUser(null);
