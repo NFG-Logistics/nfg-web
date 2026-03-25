@@ -37,7 +37,7 @@ export default async function DashboardPage() {
 
     // Fetch KPIs in parallel
     const [loadsRes, driversRes, receiptsRes, revenueRes] = await Promise.all([
-      supabase.from("loads").select("id", { count: "exact", head: true }).not("status", "in", '("delivered","cancelled","declined")'),
+      supabase.from("loads").select("id", { count: "exact", head: true }).not("status", "in", '("delivered","cancelled")'),
       supabase.from("users").select("id, availability_status").eq("role", "driver").eq("is_active", true),
       supabase
         .from("receipts")
@@ -45,7 +45,7 @@ export default async function DashboardPage() {
         .gte("created_at", todayISO)
         .lt("created_at", tomorrowISO)
         .in("receipt_type", ["fuel", "road_service"]),
-      supabase.from("loads").select("rate, completed_at").eq("status", "delivered"),
+      supabase.from("loads").select("rate, completed_at, payment_status").eq("status", "delivered"),
     ]);
 
     // Check for errors
@@ -57,18 +57,16 @@ export default async function DashboardPage() {
 
     activeLoadCount = loadsRes.count || 0;
     
-    // Available Drivers = total drivers - drivers where availability_status != 'available'
     const totalDrivers = driversRes.data?.length || 0;
     const unavailableDrivers = driversRes.data?.filter((d) => d.availability_status !== "available").length || 0;
     availableDrivers = totalDrivers - unavailableDrivers;
 
     receiptsToday = receiptsRes.count || 0;
 
-    // Monthly Revenue = SUM(rate) where delivered AND month = current month
     const deliveredLoads = revenueRes.data || [];
     monthlyRevenue = deliveredLoads
       .filter((l) => {
-        if (!l.completed_at) return false;
+        if (!l.completed_at || l.payment_status !== "paid") return false;
         const completed = new Date(l.completed_at);
         return completed.getMonth() + 1 === currentMonth && completed.getFullYear() === currentYear;
       })

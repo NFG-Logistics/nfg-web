@@ -58,7 +58,7 @@ export default function DriversPage() {
       const { data: activeLoads, error: loadsErr } = await supabase
         .from("loads")
         .select("id, reference_number, status, driver_id")
-        .not("status", "in", '("delivered","cancelled","declined")');
+        .not("status", "in", '("delivered","cancelled")');
 
       if (loadsErr) console.error("Failed to fetch active loads:", loadsErr);
 

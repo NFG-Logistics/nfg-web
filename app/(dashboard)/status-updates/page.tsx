@@ -51,7 +51,6 @@ import { toast } from "sonner";
 // Active (non-terminal) statuses for the main table
 // ---------------------------------------------------------------------------
 const ACTIVE_STATUSES: LoadStatus[] = [
-  "pending_acceptance",
   "dispatched",
   "on_site_shipper",
   "loaded",

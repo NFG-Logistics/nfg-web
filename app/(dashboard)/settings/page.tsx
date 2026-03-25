@@ -55,7 +55,6 @@ const ROLE_CONFIG: Record<
 // ─── Types for system preferences ──────────────────────────────────────────
 
 interface DispatchSettings {
-  require_driver_acceptance: boolean;
   default_load_status: string;
   auto_set_driver_unavailable: boolean;
 }
@@ -77,8 +76,7 @@ interface FleetSettings {
 }
 
 const DEFAULT_DISPATCH: DispatchSettings = {
-  require_driver_acceptance: true,
-  default_load_status: "pending_acceptance",
+  default_load_status: "dispatched",
   auto_set_driver_unavailable: true,
 };
 
@@ -86,7 +84,7 @@ const DEFAULT_NOTIFICATION: NotificationSettings = {
   enable_push_notifications: true,
   enable_in_app_notifications: true,
   dispatch_notification_template:
-    "You have been assigned a new load. Please review and accept or decline.",
+    "You have been assigned a new load. Check your loads for details.",
 };
 
 const DEFAULT_DOCUMENT: DocumentSettings = {
@@ -690,40 +688,12 @@ export default function SettingsPage() {
                   <CardContent className="space-y-5">
                     <div className="flex items-center justify-between">
                       <div className="space-y-0.5">
-                        <Label className="text-sm font-medium">Require Driver Acceptance</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Drivers must accept or decline dispatched loads before they become active
-                        </p>
-                      </div>
-                      <Switch
-                        checked={dispatch.require_driver_acceptance}
-                        onCheckedChange={(v) =>
-                          setDispatch((prev) => ({ ...prev, require_driver_acceptance: v }))
-                        }
-                      />
-                    </div>
-                    <Separator />
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
                         <Label className="text-sm font-medium">Default Load Status</Label>
                         <p className="text-xs text-muted-foreground">
-                          The status assigned to a newly dispatched load
+                          Loads are automatically set to &quot;Dispatched&quot; when assigned to a driver
                         </p>
                       </div>
-                      <Select
-                        value={dispatch.default_load_status}
-                        onValueChange={(v) =>
-                          setDispatch((prev) => ({ ...prev, default_load_status: v }))
-                        }
-                      >
-                        <SelectTrigger className="w-[200px]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="pending_acceptance">Pending Acceptance</SelectItem>
-                          <SelectItem value="dispatched">Dispatched</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <Badge variant="info">Dispatched</Badge>
                     </div>
                     <Separator />
                     <div className="flex items-center justify-between">

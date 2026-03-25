@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -8,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Truck, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 const REMEMBER_EMAIL_KEY = "nfg_logistics_remembered_email";
 
@@ -81,10 +82,16 @@ export default function LoginPage() {
       <div className="w-full max-w-md space-y-6">
         {/* Logo */}
         <div className="flex flex-col items-center gap-2">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary shadow-lg">
-            <Truck className="h-7 w-7 text-primary-foreground" />
+          <div className="rounded-xl bg-background/80 p-2 shadow-sm">
+            <Image
+              src="/company-logo.png"
+              alt="NFG Logistics"
+              width={280}
+              height={83}
+              priority
+              className="h-auto w-auto max-w-[220px] sm:max-w-[260px]"
+            />
           </div>
-          <h1 className="text-3xl font-bold">NFG Logistics</h1>
           <p className="text-sm text-muted-foreground">Trucking Management System</p>
         </div>
 

@@ -60,6 +60,7 @@ import {
   ShieldCheck,
   MessageSquare,
   AlertTriangle,
+  ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -74,7 +75,6 @@ import type {
 // Active statuses (everything except delivered/cancelled)
 // ---------------------------------------------------------------------------
 const ACTIVE_STATUSES: LoadStatus[] = [
-  "pending_acceptance",
   "dispatched",
   "on_site_shipper",
   "loaded",
@@ -142,14 +142,12 @@ function fmtStopDate(d: string | null | undefined) {
 }
 
 const STATUS_DOT_COLORS: Record<string, string> = {
-  pending_acceptance: "bg-orange-400",
   dispatched: "bg-blue-500",
   on_site_shipper: "bg-amber-500",
   loaded: "bg-indigo-500",
   on_site_receiver: "bg-amber-500",
   empty: "bg-slate-500",
   delivered: "bg-emerald-500",
-  declined: "bg-red-400",
   cancelled: "bg-red-500",
 };
 
@@ -282,7 +280,7 @@ export default function LoadsPage() {
     [loads]
   );
   const cancelledLoads = useMemo(
-    () => loads.filter((l) => l.status === "cancelled" || l.status === "declined"),
+    () => loads.filter((l) => l.status === "cancelled"),
     [loads]
   );
 
@@ -675,7 +673,9 @@ function LoadsTable({
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/30">
-              <TableHead className="font-semibold">Status</TableHead>
+              <TableHead className="font-semibold">
+                {tab === "completed" ? "Payment" : "Status"}
+              </TableHead>
               <TableHead className="font-semibold">Pickup Date</TableHead>
               <TableHead className="font-semibold">Delivery Date</TableHead>
               <TableHead className="font-semibold">Company Name</TableHead>
@@ -696,7 +696,11 @@ function LoadsTable({
               return (
                 <TableRow key={load.id}>
                   <TableCell>
-                    <Badge variant={sCfg?.variant}>{sCfg?.label}</Badge>
+                    {tab === "completed" ? (
+                      <PaymentStatusDropdown load={load} onUpdate={onUpdate} />
+                    ) : (
+                      <Badge variant={sCfg?.variant}>{sCfg?.label}</Badge>
+                    )}
                   </TableCell>
                   <TableCell className="text-sm whitespace-nowrap">
                     {fmtStopDate(pickup?.appointment_date)}
@@ -731,7 +735,7 @@ function LoadsTable({
                       </Button>
                       {tab === "active" &&
                         onCancel &&
-                        !["delivered", "cancelled", "declined"].includes(load.status) && (
+                        !["delivered", "cancelled"].includes(load.status) && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -764,6 +768,23 @@ function LoadDetailDialog({
   open: boolean;
   onClose: () => void;
 }) {
+  const supabase = useMemo(() => createClient(), []);
+  const [rcLoading, setRcLoading] = useState(false);
+
+  const handleViewRateConfirmation = async () => {
+    if (!load?.rate_confirmation_path) return;
+    setRcLoading(true);
+    const { data, error } = await supabase.storage
+      .from("rate-confirmations")
+      .createSignedUrl(load.rate_confirmation_path, 3600);
+    setRcLoading(false);
+    if (data?.signedUrl) {
+      window.open(data.signedUrl, "_blank");
+    } else {
+      toast.error("Failed to load rate confirmation");
+    }
+  };
+
   if (!load) return null;
 
   const stops = [...(load.stops ?? [])].sort(
@@ -861,6 +882,22 @@ function LoadDetailDialog({
                 />
               )}
             </div>
+
+            {load.rate_confirmation_path && (
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={handleViewRateConfirmation}
+                disabled={rcLoading}
+              >
+                {rcLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                )}
+                View Rate Confirmation
+              </Button>
+            )}
 
             {load.special_instructions && (
               <div className="rounded-lg border bg-blue-50/50 p-3 dark:bg-blue-950/20">

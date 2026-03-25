@@ -117,7 +117,7 @@ export default function DispatchPage() {
           supabase
             .from("loads")
             .select("truck_id, trailer_id, status")
-            .not("status", "in", '("delivered","cancelled","declined")'),
+            .not("status", "in", '("delivered","cancelled")'),
         ]);
 
       if (trucksError) {
@@ -351,7 +351,6 @@ export default function DispatchPage() {
         };
       });
 
-      // Create load with pending_acceptance status
       const { data: load, error: loadError } = await supabase
         .from("loads")
         .insert({
@@ -364,7 +363,7 @@ export default function DispatchPage() {
           rate: Number(rate),
           client_name: clientName.trim(),
           special_instructions: loadNotes.trim() || null,
-          status: "pending_acceptance",
+          status: "dispatched",
         })
         .select()
         .single();
@@ -411,13 +410,12 @@ export default function DispatchPage() {
         return;
       }
 
-      // Create status update
       await supabase.from("status_updates").insert({
         load_id: load.id,
         previous_status: null,
-        new_status: "pending_acceptance",
+        new_status: "dispatched",
         changed_by: user?.id,
-        notes: "Load created — awaiting driver acceptance",
+        notes: "Load dispatched to driver",
       });
 
       // Send notification to driver
@@ -438,7 +436,7 @@ export default function DispatchPage() {
         .update({ availability_status: "unavailable" })
         .eq("id", selectedDriver);
 
-      toast.success(`Load ${loadNumber} dispatched successfully — awaiting driver acceptance`);
+      toast.success(`Load ${loadNumber} dispatched successfully`);
       router.push("/loads");
     } catch (err) {
       toast.error(`Error: ${(err as Error).message}`);

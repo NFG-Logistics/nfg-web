@@ -112,13 +112,16 @@ export default function ReportsPage() {
 
   // ── Derived data ────────────────────────────────────────────────────
   const inUseStatuses = useMemo(
-    () => new Set<LoadStatus>(["pending_acceptance", "dispatched", "on_site_shipper", "loaded", "on_site_receiver", "empty", "retake_requested"] as LoadStatus[]),
+    () => new Set<LoadStatus>(["dispatched", "on_site_shipper", "loaded", "on_site_receiver", "empty", "retake_requested"] as LoadStatus[]),
     []
   );
-  // Revenue = ONLY loads where status = delivered
   const deliveredLoads = useMemo(
     () => loads.filter((l) => l.status === "delivered"),
     [loads]
+  );
+  const paidLoads = useMemo(
+    () => deliveredLoads.filter((l) => l.payment_status === "paid"),
+    [deliveredLoads]
   );
   const cancelledLoads = useMemo(
     () => loads.filter((l) => l.status === "cancelled"),
@@ -127,7 +130,7 @@ export default function ReportsPage() {
   const activeLoads = useMemo(
     () =>
       loads.filter(
-        (l) => !["delivered", "cancelled", "declined"].includes(l.status)
+        (l) => !["delivered", "cancelled"].includes(l.status)
       ),
     [loads]
   );
@@ -167,10 +170,8 @@ export default function ReportsPage() {
   }, [loads, trucks, trailers]);
 
   const topRoutes = useMemo(() => {
-    const deliveredById = new Map(
-      deliveredLoads.map((l) => [l.id, l])
-    );
-    const grouped: Record<string, { route: string; delivered_count: number; total_revenue: number }> = {};
+    const paidById = new Map(paidLoads.map((l) => [l.id, l]));
+    const grouped: Record<string, { route: string; load_count: number; total_revenue: number }> = {};
 
     const stopsByLoad = stops.reduce<Record<string, Stop[]>>((acc, stop) => {
       if (!acc[stop.load_id]) acc[stop.load_id] = [];
@@ -178,7 +179,7 @@ export default function ReportsPage() {
       return acc;
     }, {});
 
-    for (const [loadId, load] of deliveredById.entries()) {
+    for (const [loadId, load] of paidById.entries()) {
       const routeStops = (stopsByLoad[loadId] || []).slice().sort((a, b) => a.stop_order - b.stop_order);
       const firstPickup = routeStops.find((s) => s.type === "pickup");
       const lastDelivery = [...routeStops].reverse().find((s) => s.type === "delivery");
@@ -186,33 +187,24 @@ export default function ReportsPage() {
       if (!route) continue;
 
       if (!grouped[route]) {
-        grouped[route] = { route, delivered_count: 0, total_revenue: 0 };
+        grouped[route] = { route, load_count: 0, total_revenue: 0 };
       }
-      grouped[route].delivered_count += 1;
+      grouped[route].load_count += 1;
       grouped[route].total_revenue += load.rate || 0;
     }
 
     return Object.values(grouped)
-      .sort((a, b) => b.delivered_count - a.delivered_count)
+      .sort((a, b) => b.load_count - a.load_count)
       .slice(0, 3);
-  }, [deliveredLoads, stops]);
+  }, [paidLoads, stops]);
 
-  // Revenue from delivered loads only
   const totalRevenue = useMemo(
-    () => deliveredLoads.reduce((sum, l) => sum + (l.rate || 0), 0),
-    [deliveredLoads]
-  );
-  const paidRevenue = useMemo(
-    () =>
-      deliveredLoads
-        .filter((l) => l.payment_status === "paid")
-        .reduce((sum, l) => sum + (l.rate || 0), 0),
-    [deliveredLoads]
+    () => paidLoads.reduce((sum, l) => sum + (l.rate || 0), 0),
+    [paidLoads]
   );
   const avgRate = useMemo(
-    () =>
-      deliveredLoads.length > 0 ? totalRevenue / deliveredLoads.length : 0,
-    [deliveredLoads, totalRevenue]
+    () => (paidLoads.length > 0 ? totalRevenue / paidLoads.length : 0),
+    [paidLoads, totalRevenue]
   );
   const cancellationRate = useMemo(
     () =>
@@ -261,11 +253,16 @@ export default function ReportsPage() {
 
   const handleExportPdf = async () => {
     if (!exportRef.current) return;
-    const canvas = await html2canvas(exportRef.current, {
+    const el = exportRef.current;
+    el.classList.add("bg-white", "text-black");
+    el.classList.remove("bg-background");
+    const canvas = await html2canvas(el, {
       scale: 2,
       useCORS: true,
       backgroundColor: "#ffffff",
     });
+    el.classList.remove("bg-white", "text-black");
+    el.classList.add("bg-background");
     const imgData = canvas.toDataURL("image/png");
     const pdf = new jsPDF("p", "mm", "a4");
     const pageWidth = pdf.internal.pageSize.getWidth();
@@ -289,11 +286,10 @@ export default function ReportsPage() {
     pdf.save(`nfg-reports-${date}.pdf`);
   };
 
-  // Revenue data by period — strictly using completed_at on delivered loads
   const revenueData = useMemo(() => {
     const periodMap: Record<string, { revenue: number; sortKey: number }> = {};
 
-    deliveredLoads.forEach((l) => {
+    paidLoads.forEach((l) => {
       if (!l.completed_at) return;
       const completed = new Date(l.completed_at);
       let key: string;
@@ -304,14 +300,13 @@ export default function ReportsPage() {
           key = completed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
           sortKey = completed.getTime();
           break;
-        case "week":
-          const weekStart = new Date(completed);
-          weekStart.setDate(completed.getDate() - completed.getDay());
+        case "week": {
           const year = completed.getFullYear();
           const weekNum = Math.ceil((completed.getTime() - new Date(year, 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000));
           key = `${year}-W${weekNum.toString().padStart(2, "0")}`;
           sortKey = year * 100 + weekNum;
           break;
+        }
         case "month":
           key = completed.toLocaleDateString("en-US", { month: "short", year: "numeric" });
           sortKey = completed.getFullYear() * 100 + (completed.getMonth() + 1);
@@ -331,49 +326,18 @@ export default function ReportsPage() {
       periodMap[key].revenue += l.rate || 0;
     });
 
-    // Get all periods and fill gaps if needed
-    const allPeriods = new Set<string>();
-    deliveredLoads.forEach((l) => {
-      if (!l.completed_at) return;
-      const completed = new Date(l.completed_at);
-      let key: string;
-      switch (revenuePeriod) {
-        case "day":
-          key = completed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-          break;
-        case "week":
-          const weekStart = new Date(completed);
-          weekStart.setDate(completed.getDate() - completed.getDay());
-          const year = completed.getFullYear();
-          const weekNum = Math.ceil((completed.getTime() - new Date(year, 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000));
-          key = `${year}-W${weekNum.toString().padStart(2, "0")}`;
-          break;
-        case "month":
-          key = completed.toLocaleDateString("en-US", { month: "short", year: "numeric" });
-          break;
-        case "year":
-          key = completed.getFullYear().toString();
-          break;
-        default:
-          key = completed.toLocaleDateString("en-US", { month: "short", year: "numeric" });
-      }
-      allPeriods.add(key);
-    });
-
-    // Sort chronologically ascending
     return Object.entries(periodMap)
       .map(([period, data]) => ({ period, revenue: data.revenue, sortKey: data.sortKey }))
       .sort((a, b) => a.sortKey - b.sortKey)
       .slice(-12);
-  }, [deliveredLoads, revenuePeriod]);
+  }, [paidLoads, revenuePeriod]);
 
-  // Top drivers — delivered loads only
   const topDrivers = useMemo(() => {
     const map: Record<
       string,
       { driverId: string; revenue: number; loadCount: number }
     > = {};
-    deliveredLoads.forEach((l) => {
+    paidLoads.forEach((l) => {
       if (!l.driver_id) return;
       if (!map[l.driver_id]) {
         map[l.driver_id] = {
@@ -395,7 +359,7 @@ export default function ReportsPage() {
           name: driver?.full_name ?? "Unknown Driver",
           email: driver?.email,
           phone: driver?.phone,
-          deliveredCount: entry.loadCount,
+          paidCount: entry.loadCount,
           revenue: entry.revenue,
           avgPerLoad:
             entry.loadCount > 0
@@ -403,7 +367,7 @@ export default function ReportsPage() {
               : 0,
         };
       });
-  }, [deliveredLoads, drivers]);
+  }, [paidLoads, drivers]);
 
   // ── Loading ─────────────────────────────────────────────────────────
   if (userLoading || loading) {
@@ -423,7 +387,7 @@ export default function ReportsPage() {
       <div className="flex justify-end">
         <button
           onClick={handleExportPdf}
-          className="inline-flex items-center rounded-md border px-3 py-2 text-sm font-medium hover:bg-accent"
+          className="inline-flex items-center rounded-md border border-border bg-card text-card-foreground px-3 py-2 text-sm font-medium hover:bg-accent"
           type="button"
         >
           <Download className="mr-2 h-4 w-4" />
@@ -431,7 +395,7 @@ export default function ReportsPage() {
         </button>
       </div>
 
-      <div ref={exportRef} className="space-y-6 bg-white p-2">
+      <div ref={exportRef} className="space-y-6 bg-background p-2">
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
@@ -446,8 +410,7 @@ export default function ReportsPage() {
               ${totalRevenue.toLocaleString()}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              ${paidRevenue.toLocaleString()} collected ·{" "}
-              {deliveredLoads.length} delivered loads
+              {paidLoads.length} paid · {deliveredLoads.length} delivered
             </p>
           </CardContent>
         </Card>
@@ -466,7 +429,7 @@ export default function ReportsPage() {
               })}
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              per delivered load
+              per paid load
             </p>
           </CardContent>
         </Card>
@@ -523,7 +486,7 @@ export default function ReportsPage() {
                     Revenue
                   </CardTitle>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Based on <code>completed_at</code> of delivered loads only
+                    Only loads marked as Paid are included
                   </p>
                 </div>
                 <Select value={revenuePeriod} onValueChange={(v) => setRevenuePeriod(v as any)}>
@@ -550,20 +513,32 @@ export default function ReportsPage() {
                     <BarChart data={revenueData}>
                       <CartesianGrid
                         strokeDasharray="3 3"
-                        className="stroke-muted"
+                        stroke="hsl(var(--border))"
                       />
-                      <XAxis dataKey="period" className="text-xs" />
+                      <XAxis
+                        dataKey="period"
+                        className="text-xs"
+                        tick={{ fill: "hsl(var(--muted-foreground))" }}
+                      />
                       <YAxis
                         tickFormatter={(v) =>
                           `$${(v / 1000).toFixed(0)}k`
                         }
                         className="text-xs"
+                        tick={{ fill: "hsl(var(--muted-foreground))" }}
                       />
                       <Tooltip
                         formatter={(value: number) => [
                           `$${value.toLocaleString()}`,
                           "Revenue",
                         ]}
+                        contentStyle={{
+                          backgroundColor: "hsl(var(--card))",
+                          borderColor: "hsl(var(--border))",
+                          color: "hsl(var(--card-foreground))",
+                          borderRadius: "0.5rem",
+                        }}
+                        labelStyle={{ color: "hsl(var(--card-foreground))" }}
                       />
                       <Bar
                         dataKey="revenue"
@@ -587,7 +562,7 @@ export default function ReportsPage() {
                 Top Drivers by Revenue
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                Ranked by total revenue from delivered loads only
+                Ranked by total revenue from paid loads only
               </p>
             </CardHeader>
             <CardContent className="p-0">
@@ -595,7 +570,7 @@ export default function ReportsPage() {
                 <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                   <Users2 className="h-10 w-10 mb-2 opacity-40" />
                   <p className="text-sm">
-                    No delivered loads with assigned drivers yet
+                    No paid loads with assigned drivers yet
                   </p>
                 </div>
               ) : (
@@ -667,7 +642,7 @@ export default function ReportsPage() {
                           </TableCell>
                           <TableCell className="text-center">
                             <Badge variant="success" className="text-xs">
-                              {d.deliveredCount} loads
+                              {d.paidCount} loads
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right font-semibold">
@@ -723,7 +698,14 @@ export default function ReportsPage() {
                           />
                         ))}
                       </Pie>
-                      <Tooltip />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "hsl(var(--card))",
+                          borderColor: "hsl(var(--border))",
+                          color: "hsl(var(--card-foreground))",
+                          borderRadius: "0.5rem",
+                        }}
+                      />
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
@@ -764,7 +746,7 @@ export default function ReportsPage() {
                         <div>
                           <p className="font-semibold">{route.route || "—"}</p>
                           <p className="text-sm text-muted-foreground">
-                            {route.delivered_count || 0} loads
+                            {route.load_count || 0} loads
                           </p>
                         </div>
                       </div>
@@ -886,7 +868,14 @@ export default function ReportsPage() {
                           />
                         ))}
                       </Pie>
-                      <Tooltip />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "hsl(var(--card))",
+                          borderColor: "hsl(var(--border))",
+                          color: "hsl(var(--card-foreground))",
+                          borderRadius: "0.5rem",
+                        }}
+                      />
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
