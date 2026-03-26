@@ -1,5 +1,9 @@
 import { createBrowserClient } from "@supabase/ssr";
-import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase/env";
+import {
+  getSupabaseAnonKey,
+  getSupabaseCookieOptions,
+  getSupabaseUrl,
+} from "@/lib/supabase/env";
 
 export function createClient() {
   const url = getSupabaseUrl();
@@ -13,5 +17,6 @@ export function createClient() {
       // cookie session in production (see Supabase SSR + Next.js refresh issues).
       detectSessionInUrl: false,
     },
+    cookieOptions: getSupabaseCookieOptions(),
   });
 }

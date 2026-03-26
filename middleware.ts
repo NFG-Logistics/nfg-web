@@ -1,6 +1,10 @@
 import { createServerClient } from "@supabase/ssr";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
-import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase/env";
+import {
+  getSupabaseAnonKey,
+  getSupabaseCookieOptions,
+  getSupabaseUrl,
+} from "@/lib/supabase/env";
 import { NextResponse, type NextRequest } from "next/server";
 
 function missingEnvResponse() {
@@ -49,11 +53,17 @@ export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      // Avoid parsing/clearing session based on URL fragments on full reloads.
+      detectSessionInUrl: false,
+    },
     cookies: {
       getAll() {
         return request.cookies.getAll();
       },
       setAll(cookiesToSet) {
+        // `request.cookies.set` in middleware only supports (name, value).
+        // The important part for auth is writing the cookie options to the response.
         cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
         supabaseResponse = NextResponse.next({ request });
         cookiesToSet.forEach(({ name, value, options }) =>
@@ -61,6 +71,7 @@ export async function middleware(request: NextRequest) {
         );
       },
     },
+    cookieOptions: getSupabaseCookieOptions(),
   });
 
   const user = await getAuthUser(supabase);
