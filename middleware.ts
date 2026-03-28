@@ -1,26 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-function getSupabaseSessionCookieNames(request: NextRequest): string[] {
-  return request.cookies
-    .getAll()
-    .map(({ name }) => name)
-    .filter((name) => /^sb-.+-auth-token/.test(name));
-}
-
 export async function middleware(request: NextRequest) {
-  const path = request.nextUrl.pathname;
-  const isLoginPage = path === "/login";
-  const isApiRoute = path.startsWith("/api/");
-
-  const sessionCookieNames = getSupabaseSessionCookieNames(request);
-  const hasCookies = sessionCookieNames.length > 0;
-
-  // No cookies + login page → nothing to validate, let it through immediately.
-  if (isLoginPage && !hasCookies) {
-    return NextResponse.next();
-  }
-
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? "";
   const supabaseKey =
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
@@ -51,44 +32,38 @@ export async function middleware(request: NextRequest) {
     },
   });
 
+  // getUser() validates the JWT with the Auth server AND triggers a token
+  // refresh when the access-token has expired.  The library awaits the
+  // onAuthStateChange callback so by the time getUser() returns, any
+  // refreshed cookies have already been written to supabaseResponse.
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const path = request.nextUrl.pathname;
+  const isLoginPage = path === "/login";
+  const isApiRoute = path.startsWith("/api/");
+
   if (isApiRoute) return supabaseResponse;
 
-  // Helper: copy refreshed cookies from supabaseResponse onto a redirect.
-  function redirectTo(destination: string) {
-    const url = request.nextUrl.clone();
-    url.pathname = destination;
-    const resp = NextResponse.redirect(url);
-    supabaseResponse.cookies.getAll().forEach((c) => {
-      resp.cookies.set(c.name, c.value, c);
-    });
-    return resp;
-  }
-
-  // Helper: delete every sb-*-auth-token cookie so the browser client
-  // never finds stale tokens and enters a refresh-retry loop.
-  function clearSessionCookies(resp: NextResponse) {
-    for (const name of sessionCookieNames) {
-      resp.cookies.set(name, "", { maxAge: 0, path: "/" });
-    }
-    return resp;
-  }
-
   if (!user && !isLoginPage) {
-    return clearSessionCookies(redirectTo("/login"));
-  }
-
-  // Stale cookies exist but the session is dead — nuke them so the browser
-  // client on /login doesn't try to refresh_token in a loop.
-  if (!user && isLoginPage && hasCookies) {
-    return clearSessionCookies(NextResponse.next({ request }));
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    const redirect = NextResponse.redirect(url);
+    supabaseResponse.cookies.getAll().forEach((c) => {
+      redirect.cookies.set(c.name, c.value, c);
+    });
+    return redirect;
   }
 
   if (user && isLoginPage) {
-    return redirectTo("/dashboard");
+    const url = request.nextUrl.clone();
+    url.pathname = "/dashboard";
+    const redirect = NextResponse.redirect(url);
+    supabaseResponse.cookies.getAll().forEach((c) => {
+      redirect.cookies.set(c.name, c.value, c);
+    });
+    return redirect;
   }
 
   return supabaseResponse;
