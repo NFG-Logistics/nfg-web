@@ -1,7 +1,23 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+/** True if the request carries Supabase session cookies (incl. chunked `.0`, `.1`, …). */
+function hasSupabaseSessionCookie(request: NextRequest): boolean {
+  return request.cookies.getAll().some(({ name }) => /^sb-.+-auth-token(\.\d+)?$/.test(name));
+}
+
 export async function middleware(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  const isLoginPage = path === "/login";
+  const isApiRoute = path.startsWith("/api/");
+
+  // Avoid calling supabase.auth.getUser() on every /login hit — each call hits Auth
+  // (GET /user) and counts toward Supabase rate limits. Anonymous visitors have no
+  // session cookies; only validate when cookies suggest an existing session.
+  if (isLoginPage && !hasSupabaseSessionCookie(request)) {
+    return NextResponse.next();
+  }
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? "";
   const supabaseKey =
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
@@ -39,10 +55,6 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  const path = request.nextUrl.pathname;
-  const isLoginPage = path === "/login";
-  const isApiRoute = path.startsWith("/api/");
 
   if (isApiRoute) return supabaseResponse;
 
