@@ -21,23 +21,19 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // On mount:
-  // - If a Supabase session already exists → redirect to dashboard
-  // - Load remembered email (if any)
+  // On mount: clear any stale auth state so the browser client doesn't
+  // try to refresh an expired token in a loop, then load remembered email.
+  // The middleware already redirects authenticated users to /dashboard,
+  // so if we're here, the session is invalid or absent.
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     const supabase = createClient();
 
     const init = async () => {
-      // Use getSession() which handles token refresh automatically.
-      // getUser() would fail if the access token is expired and the
-      // refresh hasn't kicked in yet, causing a needless re-login.
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        router.replace("/dashboard");
-        return;
-      }
+      // signOut({ scope: "local" }) clears client-side tokens/cookies
+      // without hitting the Auth server, preventing refresh-retry loops.
+      await supabase.auth.signOut({ scope: "local" });
 
       const remembered = localStorage.getItem(REMEMBER_EMAIL_KEY);
       if (remembered) {
