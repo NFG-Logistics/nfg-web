@@ -19,24 +19,6 @@ import { Loader2 } from "lucide-react";
 
 const REMEMBER_EMAIL_KEY = "nfg_logistics_remembered_email";
 
-/**
- * Wipe every sb-* cookie from document.cookie.  This MUST run before
- * createBrowserClient() is ever called, because the Supabase client
- * constructor immediately starts _recoverAndRefresh() which reads
- * document.cookie.  If it finds a stale token it enters an infinite
- * refresh → fail → SIGNED_OUT → Realtime getSession → refresh loop.
- */
-function nukeStaleAuthCookies() {
-  if (typeof document === "undefined") return;
-  document.cookie
-    .split(";")
-    .map((c) => c.trim().split("=")[0])
-    .filter((name) => name.startsWith("sb-"))
-    .forEach((name) => {
-      document.cookie = `${name}=; Max-Age=0; path=/;`;
-    });
-}
-
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -46,11 +28,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // Step 1: Kill any leftover auth cookies so the Supabase client
-    //         singleton initialises with a clean slate.
-    nukeStaleAuthCookies();
-
-    // Step 2: Load remembered email
     const remembered = localStorage.getItem(REMEMBER_EMAIL_KEY);
     if (remembered) {
       setEmail(remembered);

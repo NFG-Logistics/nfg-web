@@ -1,5 +1,4 @@
 import { createClient } from "@/lib/supabase/server";
-import { getSupabaseUrl } from "@/lib/supabase/env";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
@@ -82,7 +81,10 @@ export async function POST(request: Request) {
     }
 
     // Use admin API (preferred)
-    const adminClient = createServiceClient(getSupabaseUrl(), serviceRoleKey);
+    const adminClient = createServiceClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      serviceRoleKey
+    );
 
     const { data: adminData, error: adminError } =
       await adminClient.auth.admin.createUser({

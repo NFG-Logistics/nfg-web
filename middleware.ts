@@ -1,38 +1,29 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-/**
- * Returns true when the request carries any sb-…-auth-token cookie
- * (including chunked variants like .0, .1, …).
- */
-function hasAuthCookies(req: NextRequest): boolean {
-  return req.cookies.getAll().some(({ name }) => name.startsWith("sb-"));
-}
-
-/**
- * Delete every sb-* cookie on the response so the browser never retains
- * stale tokens that trigger an infinite refresh-retry loop.
- */
-function deleteAuthCookies(req: NextRequest, res: NextResponse): void {
-  req.cookies.getAll().forEach(({ name }) => {
-    if (name.startsWith("sb-")) {
-      res.cookies.set(name, "", { maxAge: 0, path: "/" });
-    }
-  });
-}
-
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isLoginPage = path === "/login";
   const isApiRoute = path.startsWith("/api/");
 
-  // ── Fast-path: /login with no auth cookies → skip Supabase entirely ──
-  if (isLoginPage && !hasAuthCookies(request)) {
+  // Fast-path: /login with zero sb-* cookies → nothing to validate
+  if (
+    isLoginPage &&
+    !request.cookies.getAll().some(({ name }) => name.startsWith("sb-"))
+  ) {
     return NextResponse.next();
   }
 
-  // ── Build Supabase server client with cookie bridge ──────────────────
-  let supabaseResponse = NextResponse.next({ request });
+  // ── Accumulator for ALL cookies set during the Supabase auth flow ────
+  // This is the critical fix: setAll() can be called MULTIPLE times during
+  // a single getUser() (e.g. once for token refresh, once for session save).
+  // Each call must ADD to the list — NOT recreate the response and lose
+  // cookies from earlier calls.  We collect them all, then apply once.
+  const cookiesToApply: {
+    name: string;
+    value: string;
+    options: Record<string, unknown>;
+  }[] = [];
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -43,60 +34,74 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet) {
-          // 1. Mirror into the request so downstream Server Components see them
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          // 2. Re-create the response so the Set-Cookie headers are included
-          supabaseResponse = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          );
+          cookiesToSet.forEach(({ name, value, options }) => {
+            // Mirror into the request so downstream Server Components see them
+            request.cookies.set(name, value);
+            // Accumulate for the response
+            cookiesToApply.push({ name, value, options: options as Record<string, unknown> });
+          });
         },
       },
     }
   );
 
-  // ── Validate session — this also refreshes expired tokens ────────────
+  // Validate session — this also refreshes expired tokens and triggers setAll
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Let API routes through (they do their own auth checks)
-  if (isApiRoute) {
-    return supabaseResponse;
+  // ── Now build the ONE response with ALL accumulated cookies ──────────
+
+  function buildResponse(base: NextResponse): NextResponse {
+    cookiesToApply.forEach(({ name, value, options }) => {
+      base.cookies.set(name, value, options);
+    });
+    return base;
   }
 
-  // ── Routing logic ────────────────────────────────────────────────────
-
-  // Not authenticated + not on login → redirect to /login & nuke stale cookies
-  if (!user && !isLoginPage) {
+  function deleteStaleAndRedirectToLogin(): NextResponse {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    const redirect = NextResponse.redirect(url);
-    deleteAuthCookies(request, redirect);
-    return redirect;
+    const resp = NextResponse.redirect(url);
+    // Nuke every sb-* cookie so the browser client doesn't retry stale tokens
+    request.cookies.getAll().forEach(({ name }) => {
+      if (name.startsWith("sb-")) {
+        resp.cookies.set(name, "", { maxAge: 0, path: "/" });
+      }
+    });
+    return resp;
   }
 
-  // Not authenticated + on login + has stale cookies → nuke them
+  // Let API routes through
+  if (isApiRoute) {
+    return buildResponse(NextResponse.next({ request }));
+  }
+
+  // Not authenticated + not on login → nuke cookies & redirect
+  if (!user && !isLoginPage) {
+    return deleteStaleAndRedirectToLogin();
+  }
+
+  // Not authenticated + on login with stale cookies → nuke them
   if (!user && isLoginPage) {
-    deleteAuthCookies(request, supabaseResponse);
-    return supabaseResponse;
+    const resp = NextResponse.next({ request });
+    request.cookies.getAll().forEach(({ name }) => {
+      if (name.startsWith("sb-")) {
+        resp.cookies.set(name, "", { maxAge: 0, path: "/" });
+      }
+    });
+    return resp;
   }
 
-  // Authenticated + on login → redirect to dashboard
+  // Authenticated + on login → redirect to dashboard with fresh cookies
   if (user && isLoginPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
-    const redirect = NextResponse.redirect(url);
-    supabaseResponse.cookies.getAll().forEach((c) =>
-      redirect.cookies.set(c.name, c.value, c)
-    );
-    return redirect;
+    return buildResponse(NextResponse.redirect(url));
   }
 
-  // Authenticated + normal page → pass through with refreshed cookies
-  return supabaseResponse;
+  // Authenticated + normal page → pass through with ALL refreshed cookies
+  return buildResponse(NextResponse.next({ request }));
 }
 
 export const config = {

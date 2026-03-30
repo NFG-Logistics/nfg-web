@@ -18,7 +18,9 @@ export function createClient() {
               cookieStore.set(name, value, options)
             );
           } catch {
-            // Server Components are read-only. The middleware handles writes.
+            // Server Components are read-only — the middleware handles cookie writes.
+            // Route Handlers and Server Actions CAN set cookies, so this only
+            // silences the error for Server Components.
           }
         },
       },

@@ -5,12 +5,13 @@ async function handleSignOut(request: Request) {
   const supabase = createClient();
   await supabase.auth.signOut();
 
-  const url = new URL(request.url);
-  const response = NextResponse.redirect(new URL("/login", url.origin), {
+  const origin = new URL(request.url).origin;
+  const response = NextResponse.redirect(new URL("/login", origin), {
     status: 302,
   });
 
-  // Delete all sb-* cookies to ensure the browser is fully clean
+  // Nuke every sb-* cookie so the browser is fully clean after sign-out.
+  // This prevents stale tokens from triggering refresh loops on the login page.
   const cookieHeader = request.headers.get("cookie") || "";
   cookieHeader
     .split(";")
