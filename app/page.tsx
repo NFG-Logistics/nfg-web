@@ -7,9 +7,6 @@ export default async function Home() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // If NOT logged in → redirect('/login')
-  // If logged in → redirect('/dashboard')
-  // Never render dashboard directly at root
   if (!user) {
     redirect("/login");
   }

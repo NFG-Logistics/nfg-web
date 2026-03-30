@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
-export async function POST(request: Request) {
+async function handleSignOut(request: Request) {
   const supabase = createClient();
   await supabase.auth.signOut();
 
@@ -10,48 +10,23 @@ export async function POST(request: Request) {
     status: 302,
   });
 
-  // PART 5: Clear cookies properly
-  // Delete all Supabase auth cookies
+  // Delete all sb-* cookies to ensure the browser is fully clean
   const cookieHeader = request.headers.get("cookie") || "";
-  const cookies = cookieHeader.split(";").map((c) => c.trim().split("=")[0]);
-  for (const name of cookies) {
-    if (name.startsWith("sb-")) {
-      response.cookies.set(name, "", { maxAge: 0, path: "/", httpOnly: false });
-    }
-  }
-
-  // Also clear known Supabase cookie patterns
-  const knownCookieNames = [
-    "sb-ohuddpwqnwdvyejwlumo-auth-token",
-    "sb-ohuddpwqnwdvyejwlumo-auth-token.0",
-    "sb-ohuddpwqnwdvyejwlumo-auth-token.1",
-  ];
-
-  for (const name of knownCookieNames) {
-    response.cookies.set(name, "", { maxAge: 0, path: "/", httpOnly: false });
-  }
+  cookieHeader
+    .split(";")
+    .map((c) => c.trim().split("=")[0])
+    .filter((name) => name.startsWith("sb-"))
+    .forEach((name) => {
+      response.cookies.set(name, "", { maxAge: 0, path: "/" });
+    });
 
   return response;
 }
 
 export async function GET(request: Request) {
-  const supabase = createClient();
-  await supabase.auth.signOut();
+  return handleSignOut(request);
+}
 
-  const url = new URL(request.url);
-  const response = NextResponse.redirect(new URL("/login", url.origin), {
-    status: 302,
-  });
-
-  // PART 5: Clear cookies properly
-  // Delete all cookies that start with sb-
-  const cookieHeader = request.headers.get("cookie") || "";
-  const cookies = cookieHeader.split(";").map((c) => c.trim().split("=")[0]);
-  for (const name of cookies) {
-    if (name.startsWith("sb-")) {
-      response.cookies.set(name, "", { maxAge: 0, path: "/", httpOnly: false });
-    }
-  }
-
-  return response;
+export async function POST(request: Request) {
+  return handleSignOut(request);
 }

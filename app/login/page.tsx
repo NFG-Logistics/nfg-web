@@ -5,13 +5,37 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2 } from "lucide-react";
 
 const REMEMBER_EMAIL_KEY = "nfg_logistics_remembered_email";
+
+/**
+ * Wipe every sb-* cookie from document.cookie.  This MUST run before
+ * createBrowserClient() is ever called, because the Supabase client
+ * constructor immediately starts _recoverAndRefresh() which reads
+ * document.cookie.  If it finds a stale token it enters an infinite
+ * refresh → fail → SIGNED_OUT → Realtime getSession → refresh loop.
+ */
+function nukeStaleAuthCookies() {
+  if (typeof document === "undefined") return;
+  document.cookie
+    .split(";")
+    .map((c) => c.trim().split("=")[0])
+    .filter((name) => name.startsWith("sb-"))
+    .forEach((name) => {
+      document.cookie = `${name}=; Max-Age=0; path=/;`;
+    });
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -21,60 +45,49 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // On mount:
-  // - If a Supabase session already exists → redirect to dashboard
-  // - Load remembered email (if any)
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    // Step 1: Kill any leftover auth cookies so the Supabase client
+    //         singleton initialises with a clean slate.
+    nukeStaleAuthCookies();
 
-    const supabase = createClient();
-
-    const init = async () => {
-      // Use getSession() which handles token refresh automatically.
-      // getUser() would fail if the access token is expired and the
-      // refresh hasn't kicked in yet, causing a needless re-login.
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        router.replace("/dashboard");
-        return;
-      }
-
-      const remembered = localStorage.getItem(REMEMBER_EMAIL_KEY);
-      if (remembered) {
-        setEmail(remembered);
-        setRememberMe(true);
-      }
-    };
-
-    void init();
-  }, [router]);
+    // Step 2: Load remembered email
+    const remembered = localStorage.getItem(REMEMBER_EMAIL_KEY);
+    if (remembered) {
+      setEmail(remembered);
+      setRememberMe(true);
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
 
-    const supabase = createClient();
-    const { error: authError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const supabase = createClient();
+      const { error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (authError) {
-      setError(authError.message);
+      if (authError) {
+        setError(authError.message);
+        setLoading(false);
+        return;
+      }
+
+      if (rememberMe) {
+        localStorage.setItem(REMEMBER_EMAIL_KEY, email);
+      } else {
+        localStorage.removeItem(REMEMBER_EMAIL_KEY);
+      }
+
+      router.push("/dashboard");
+      router.refresh();
+    } catch {
+      setError("An unexpected error occurred. Please try again.");
       setLoading(false);
-      return;
     }
-
-    // Store email if Remember Me is checked
-    if (rememberMe && typeof window !== "undefined") {
-      localStorage.setItem(REMEMBER_EMAIL_KEY, email);
-    } else if (!rememberMe && typeof window !== "undefined") {
-      localStorage.removeItem(REMEMBER_EMAIL_KEY);
-    }
-
-    router.push("/dashboard");
-    router.refresh();
   };
 
   return (
@@ -92,14 +105,18 @@ export default function LoginPage() {
               className="h-auto w-auto max-w-[220px] sm:max-w-[260px]"
             />
           </div>
-          <p className="text-sm text-muted-foreground">Trucking Management System</p>
+          <p className="text-sm text-muted-foreground">
+            Trucking Management System
+          </p>
         </div>
 
         {/* Login Card */}
         <Card>
           <CardHeader className="space-y-1">
             <CardTitle className="text-xl">Sign in</CardTitle>
-            <CardDescription>Enter your credentials to access the dashboard</CardDescription>
+            <CardDescription>
+              Enter your credentials to access the dashboard
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">

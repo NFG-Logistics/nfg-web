@@ -15,9 +15,7 @@ function fallbackUser(su: {
     company_id: (meta.company_id as string) ?? "",
     role: ((meta.role as string) ?? "admin") as User["role"],
     full_name:
-      (meta.full_name as string) ??
-      su.email?.split("@")[0] ??
-      "User",
+      (meta.full_name as string) ?? su.email?.split("@")[0] ?? "User",
     email: su.email ?? "",
     phone: (meta.phone as string) ?? undefined,
     avatar_url: (meta.avatar_url as string) ?? undefined,
@@ -36,22 +34,22 @@ export function useUser() {
   const loadProfile = useCallback(
     async (
       supabase: ReturnType<typeof createClient>,
-      sessionUser: { id: string; email?: string; user_metadata?: Record<string, unknown> }
+      authUser: {
+        id: string;
+        email?: string;
+        user_metadata?: Record<string, unknown>;
+      }
     ) => {
       try {
         const { data, error } = await supabase
           .from("users")
           .select("*")
-          .eq("id", sessionUser.id)
+          .eq("id", authUser.id)
           .single();
 
-        if (data && !error) {
-          setUser(data);
-        } else {
-          setUser(fallbackUser(sessionUser));
-        }
+        setUser(data && !error ? data : fallbackUser(authUser));
       } catch {
-        setUser(fallbackUser(sessionUser));
+        setUser(fallbackUser(authUser));
       }
     },
     []
@@ -63,13 +61,11 @@ export function useUser() {
 
     const supabase = createClient();
 
+    // Initial load: getUser() validates the JWT with the Auth server
+    // and triggers a token refresh when needed — unlike getSession()
+    // which only reads local state and can return stale data.
     async function init() {
       try {
-        // getUser() validates the JWT with the Supabase Auth server.
-        // Unlike getSession(), it forces a proper token refresh when
-        // the access-token is expired — critical after a full page
-        // refresh where the middleware may have written new cookies
-        // that the browser client hasn't seen yet.
         const {
           data: { user: authUser },
         } = await supabase.auth.getUser();
@@ -81,8 +77,7 @@ export function useUser() {
         }
 
         await loadProfile(supabase, authUser);
-      } catch (err) {
-        console.error("useUser init error:", err);
+      } catch {
         setUser(null);
       } finally {
         setLoading(false);
@@ -99,7 +94,6 @@ export function useUser() {
         setLoading(false);
         return;
       }
-
       await loadProfile(supabase, session.user);
       setLoading(false);
     });
