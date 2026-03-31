@@ -109,19 +109,19 @@ export function UserProvider({
           // Server already validated the user — skip the getUser() round-trip
           await loadProfile(supabase, initialUser);
         } else {
-          // Fallback: no server seed (e.g. client-only navigation)
+          // Fallback: no server seed (e.g. client-only navigation).
+          // Use getSession() to avoid transient false-negatives in production refreshes.
           const {
-            data: { user: authUser },
-            error: userError,
-          } = await supabase.auth.getUser();
+            data: { session },
+          } = await supabase.auth.getSession();
 
-          if (userError || !authUser) {
+          if (!session?.user) {
             setUser(null);
             setLoading(false);
             return;
           }
 
-          await loadProfile(supabase, authUser);
+          await loadProfile(supabase, session.user);
         }
       } catch (err) {
         console.error("UserProvider init error:", err);
@@ -137,6 +137,14 @@ export function UserProvider({
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // In some production setups, Supabase can emit INITIAL_SESSION with a null session
+      // even though the server still has a valid cookie-based session. Don't clobber a
+      // server-seeded user in that case.
+      if (event === "INITIAL_SESSION" && !session) {
+        setLoading(false);
+        return;
+      }
+
       if (event === "SIGNED_OUT" || !session) {
         setUser(null);
         setLoading(false);
