@@ -70,6 +70,10 @@ export default function ReportsPage() {
   const exportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!userLoading && !user) {
+      router.replace("/login");
+      return;
+    }
     if (!userLoading && user?.role !== "admin") {
       router.push("/dashboard");
       return;
@@ -370,7 +374,7 @@ export default function ReportsPage() {
   }, [paidLoads, drivers]);
 
   // ── Loading ─────────────────────────────────────────────────────────
-  if (userLoading || loading) {
+  if (userLoading || (!user && !userLoading) || loading) {
     return (
       <div className="flex items-center justify-center py-16">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
