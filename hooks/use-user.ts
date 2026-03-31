@@ -1,17 +1,14 @@
 "use client";
 
-import { useUserContext } from "@/components/user-provider";
+import { useAuth } from "@/components/auth-provider";
 
 /**
- * Returns the current authenticated user.
+ * Returns the authenticated user and loading state.
  *
- * The user data originates from the server (dashboard layout fetches it
- * via the server Supabase client using middleware-refreshed cookies).
- * This eliminates the client-side getUser() call that previously caused
- * the "??" ghost mode on Vercel deployments — the browser Supabase
- * client's _recoverAndRefresh would sometimes fire SIGNED_OUT before
- * the Set-Cookie headers from the middleware were fully processed.
+ * All auth validation happens client-side via the AuthProvider.
+ * The browser Supabase client manages tokens by writing directly
+ * to document.cookie — no dependency on server-side Set-Cookie headers.
  */
 export function useUser() {
-  return useUserContext();
+  return useAuth();
 }

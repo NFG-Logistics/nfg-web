@@ -28,12 +28,20 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    // If the user already has a valid session, send them to the dashboard
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        router.replace("/dashboard");
+      }
+    });
+
     const remembered = localStorage.getItem(REMEMBER_EMAIL_KEY);
     if (remembered) {
       setEmail(remembered);
       setRememberMe(true);
     }
-  }, []);
+  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
