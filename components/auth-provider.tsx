@@ -8,7 +8,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@/types";
 import { Loader2 } from "lucide-react";
@@ -68,6 +67,22 @@ function clearAuthCookies() {
     });
 }
 
+function sendToLogin() {
+  clearAuthCookies();
+  window.location.replace("/login");
+}
+
+// Race a promise against a timeout — prevents hanging forever if the
+// Supabase client gets stuck trying to refresh an invalidated token.
+function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<T> {
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Auth timeout")), ms)
+    ),
+  ]);
+}
+
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
@@ -75,7 +90,6 @@ function clearAuthCookies() {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const router = useRouter();
   const initialised = useRef(false);
 
   const loadProfile = useCallback(
@@ -88,12 +102,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     ): Promise<User> => {
       try {
-        const { data, error } = await supabase
-          .from("users")
-          .select("*")
-          .eq("id", authUser.id)
-          .single();
-
+        const { data, error } = await withTimeout(
+          supabase.from("users").select("*").eq("id", authUser.id).single(),
+          8000
+        );
         return data && !error ? (data as User) : fallbackUser(authUser);
       } catch {
         return fallbackUser(authUser);
@@ -108,37 +120,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const supabase = createClient();
 
-    // getSession() waits for the internal _recoverAndRefresh to finish,
-    // so by the time it resolves the access token is either valid
-    // (possibly just auto-refreshed) or the session is null.
     async function init() {
       try {
         const {
           data: { session },
-        } = await supabase.auth.getSession();
+        } = await withTimeout(supabase.auth.getSession(), 8000);
 
         if (!session) {
-          setUser(null);
-          setLoading(false);
-          clearAuthCookies();
-          window.location.href = "/login";
+          sendToLogin();
           return;
         }
 
         const profile = await loadProfile(supabase, session.user);
         setUser(profile);
-      } catch {
-        setUser(null);
-        clearAuthCookies();
-        window.location.href = "/login";
-      } finally {
         setLoading(false);
+      } catch {
+        sendToLogin();
       }
     }
 
     init();
 
-    // Listen for subsequent auth changes (sign-out, sign-in from another tab, etc.)
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
