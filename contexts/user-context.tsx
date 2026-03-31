@@ -146,6 +146,14 @@ export function UserProvider({
 
     init();
 
+    // If the server already validated a user for this request, don't let the
+    // browser-side auth listener clobber it on refresh. In production, the
+    // browser client may not be able to read cookie-based sessions (httpOnly),
+    // which would emit a null/SIGNED_OUT session even though the server is valid.
+    if (initialUser) {
+      return () => {};
+    }
+
     // Listen for auth changes (sign-out, token refresh, etc.)
     let unsubscribe = () => {};
     try {

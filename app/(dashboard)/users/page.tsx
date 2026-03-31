@@ -149,7 +149,20 @@ export default function UsersPage() {
   const openEdit = (u: UserType) => { setEditUser(u); setSelectedRole(u.role); setDialogOpen(true); };
   const openCreate = () => { setEditUser(null); setSelectedRole("driver"); setDialogOpen(true); };
 
-  if (userLoading) return <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
+  if (userLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  // Prevent "infinite loading" if auth state is missing after refresh.
+  // The dashboard layout will redirect server-side when cookies are invalid.
+  if (!currentUser) {
+    router.replace("/login");
+    return null;
+  }
 
   const counts = { admin: users.filter((u) => u.role === "admin").length, dispatcher: users.filter((u) => u.role === "dispatcher").length, driver: users.filter((u) => u.role === "driver").length };
 
