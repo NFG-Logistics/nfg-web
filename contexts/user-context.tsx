@@ -9,6 +9,7 @@ import {
   useRef,
 } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { getSupabaseAnonKey, getSupabaseUrl } from "@/lib/supabase/env";
 import type { User } from "@/types";
 
 interface UserContextValue {
@@ -101,10 +102,22 @@ export function UserProvider({
     if (initialised.current) return;
     initialised.current = true;
 
-    const supabase = createClient();
-
     async function init() {
       try {
+        // If NEXT_PUBLIC Supabase env vars were not present at build time on Vercel,
+        // createClient() can throw and the app will appear to "load forever".
+        const url = getSupabaseUrl();
+        const key = getSupabaseAnonKey();
+        if (!url || !key) {
+          console.error(
+            "Supabase client env missing in browser bundle. Ensure Vercel Production env includes NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then redeploy."
+          );
+          setUser(null);
+          return;
+        }
+
+        const supabase = createClient();
+
         if (initialUser) {
           // Server already validated the user — skip the getUser() round-trip
           await loadProfile(supabase, initialUser);
@@ -134,28 +147,36 @@ export function UserProvider({
     init();
 
     // Listen for auth changes (sign-out, token refresh, etc.)
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // In some production setups, Supabase can emit INITIAL_SESSION with a null session
-      // even though the server still has a valid cookie-based session. Don't clobber a
-      // server-seeded user in that case.
-      if (event === "INITIAL_SESSION" && !session) {
-        setLoading(false);
-        return;
-      }
+    let unsubscribe = () => {};
+    try {
+      const supabase = createClient();
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange(async (event, session) => {
+        // In some production setups, Supabase can emit INITIAL_SESSION with a null session
+        // even though the server still has a valid cookie-based session. Don't clobber a
+        // server-seeded user in that case.
+        if (event === "INITIAL_SESSION" && !session) {
+          setLoading(false);
+          return;
+        }
 
-      if (event === "SIGNED_OUT" || !session) {
-        setUser(null);
-        setLoading(false);
-        return;
-      }
+        if (event === "SIGNED_OUT" || !session) {
+          setUser(null);
+          setLoading(false);
+          return;
+        }
 
-      await loadProfile(supabase, session.user);
+        await loadProfile(supabase, session.user);
+        setLoading(false);
+      });
+      unsubscribe = () => subscription.unsubscribe();
+    } catch (err) {
+      console.error("Supabase client init failed:", err);
       setLoading(false);
-    });
+    }
 
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, [initialUser, loadProfile]);
 
   return (
