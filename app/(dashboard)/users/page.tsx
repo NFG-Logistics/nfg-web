@@ -87,45 +87,32 @@ export default function UsersPage() {
 
       if (error) { toast.error(error.message); } else { toast.success("User updated"); }
     } else {
-      // Create new user via Supabase Auth signUp, then add to users table
       const email = fd.get("email") as string;
       const password = fd.get("password") as string;
       const fullName = fd.get("full_name") as string;
       const phone = fd.get("phone") as string || null;
 
-      // Use signUp (works with anon key, unlike admin.createUser which needs service role)
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: { full_name: fullName },
-        },
-      });
-
-      if (authError) {
-        toast.error(authError.message);
-        setSubmitting(false);
-        return;
+      try {
+        const res = await fetch("/api/admin/create-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            full_name: fullName,
+            email,
+            phone,
+            password,
+            role: selectedRole,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          toast.error(data.error || "Failed to create user");
+        } else {
+          toast.success("User created successfully");
+        }
+      } catch {
+        toast.error("Failed to create user");
       }
-
-      if (!authData.user) {
-        toast.error("Failed to create auth account");
-        setSubmitting(false);
-        return;
-      }
-
-      // Insert profile row in users table
-      const { error } = await supabase.from("users").insert({
-        id: authData.user.id,
-        company_id: currentUser?.company_id,
-        full_name: fullName,
-        email,
-        phone,
-        role: selectedRole,
-        is_active: true,
-      });
-
-      if (error) { toast.error(error.message); } else { toast.success("User created successfully"); }
     }
 
     setDialogOpen(false);

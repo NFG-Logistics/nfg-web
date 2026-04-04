@@ -3,9 +3,19 @@ import { getSupabaseUrl } from "@/lib/supabase/env";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
+const ALLOWED_ROLES = ["admin", "dispatcher", "driver"] as const;
+type CreatedRole = (typeof ALLOWED_ROLES)[number];
+
+function parseRole(body: { role?: string }, callerRole: string): CreatedRole | null {
+  const raw = (body.role ?? "driver").toLowerCase();
+  if (!ALLOWED_ROLES.includes(raw as CreatedRole)) return null;
+  const r = raw as CreatedRole;
+  if (callerRole === "dispatcher" && r !== "driver") return null;
+  return r;
+}
+
 export async function POST(request: Request) {
   try {
-    // 1. Verify the caller is an authenticated admin / dispatcher
     const supabase = createClient();
     const {
       data: { user: caller },
@@ -25,7 +35,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // 2. Parse body
+    const companyId = callerProfile.company_id as string | null;
+    if (!companyId) {
+      return NextResponse.json(
+        { error: "Your account has no company assigned. Cannot create users." },
+        { status: 400 }
+      );
+    }
+
     const body = await request.json();
     const { full_name, email, phone, password, truck_id, trailer_id } = body;
 
@@ -36,62 +53,40 @@ export async function POST(request: Request) {
       );
     }
 
-    // 3. Use service role key to create user via Admin API
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceRoleKey) {
-      // Fallback: use signUp if service role key is not set
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name,
-            role: "driver",
-          },
-        },
-      });
-
-      if (authError) {
-        return NextResponse.json({ error: authError.message }, { status: 400 });
-      }
-
-      if (!authData.user) {
-        return NextResponse.json(
-          { error: "Failed to create auth account" },
-          { status: 500 }
-        );
-      }
-
-      // Insert into users table
-      const { error: insertError } = await supabase.from("users").insert({
-        id: authData.user.id,
-        company_id: callerProfile.company_id,
-        full_name,
-        email,
-        phone: phone || null,
-        role: "driver",
-        is_active: true,
-        availability_status: "available",
-      });
-
-      if (insertError) {
-        return NextResponse.json({ error: insertError.message }, { status: 500 });
-      }
-
-      return NextResponse.json({ success: true, user_id: authData.user.id });
+    const newRole = parseRole(body, callerProfile.role);
+    if (!newRole) {
+      return NextResponse.json(
+        { error: "Invalid role, or dispatchers may only create driver accounts." },
+        { status: 400 }
+      );
     }
 
-    // Use admin API (preferred)
-    const adminClient = createServiceClient(getSupabaseUrl(), serviceRoleKey);
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+    if (!serviceRoleKey) {
+      return NextResponse.json(
+        {
+          error:
+            "SUPABASE_SERVICE_ROLE_KEY is not configured. Add it to the server environment so new users can be created without logging you out of the dashboard.",
+        },
+        { status: 503 }
+      );
+    }
+
+    const adminClient = createServiceClient(getSupabaseUrl(), serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
 
     const { data: adminData, error: adminError } =
       await adminClient.auth.admin.createUser({
-        email,
+        email: email.trim(),
         password,
         email_confirm: true,
+        app_metadata: {
+          company_id: companyId,
+          role: newRole,
+        },
         user_metadata: {
           full_name,
-          role: "driver",
         },
       });
 
@@ -106,32 +101,30 @@ export async function POST(request: Request) {
       );
     }
 
-    // Insert into users table with service role client (bypasses RLS)
-    const { error: insertError } = await adminClient.from("users").insert({
-      id: adminData.user.id,
-      company_id: callerProfile.company_id,
-      full_name,
-      email,
-      phone: phone || null,
-      role: "driver",
-      is_active: true,
-      availability_status: "available",
-    });
+    const { error: upsertError } = await adminClient.from("users").upsert(
+      {
+        id: adminData.user.id,
+        company_id: companyId,
+        full_name,
+        email: email.trim(),
+        phone: phone || null,
+        role: newRole,
+        is_active: true,
+        availability_status: "available",
+      },
+      { onConflict: "id" }
+    );
 
-    if (insertError) {
-      return NextResponse.json({ error: insertError.message }, { status: 500 });
+    if (upsertError) {
+      return NextResponse.json({ error: upsertError.message }, { status: 500 });
     }
 
-    // Optionally assign truck/trailer if provided (no load needed)
-    // This is informational - trucks/trailers are assigned to loads, not drivers directly
-    // But we can store it in user metadata or a separate table if needed in the future
+    void truck_id;
+    void trailer_id;
 
     return NextResponse.json({ success: true, user_id: adminData.user.id });
-  } catch (err: any) {
-    console.error("create-user error:", err);
-    return NextResponse.json(
-      { error: err.message || "Internal server error" },
-      { status: 500 }
-    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Internal server error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -19,6 +19,16 @@ export default async function DashboardLayout({
     redirect("/login");
   }
 
+  const { data: profile } = await supabase
+    .from("users")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (profile?.role === "driver") {
+    redirect("/driver-app");
+  }
+
   // Pass server-validated user to client components via DashboardShell.
   return (
     <DashboardShell
