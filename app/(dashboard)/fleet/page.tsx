@@ -13,15 +13,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Pencil, Trash2, Search, Loader2, Wrench, Package } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import type { Truck, Trailer, Load } from "@/types";
+import type { Truck, Trailer } from "@/types";
 
 export default function FleetPage() {
   const supabase = createClient();
   const { user } = useUser();
-  const [trucks, setTrucks] = useState<(Truck & { assigned_load?: Load | null })[]>([]);
-  const [trailers, setTrailers] = useState<(Trailer & { assigned_load?: Load | null })[]>([]);
+  const [trucks, setTrucks] = useState<Truck[]>([]);
+  const [trailers, setTrailers] = useState<Trailer[]>([]);
   const [loading, setLoading] = useState(true);
   const [truckSearch, setTruckSearch] = useState("");
   const [trailerSearch, setTrailerSearch] = useState("");
@@ -49,31 +49,8 @@ export default function FleetPage() {
 
       if (trailersErr) throw trailersErr;
 
-      // Fetch active loads for assignment display
-      const { data: activeLoads } = await supabase
-        .from("loads")
-        .select("id, reference_number, status, truck_id, trailer_id")
-        .not("status", "in", '("delivered","cancelled")');
-
-      const loadMap = new Map((activeLoads || []).map((l) => [l.id, l]));
-
-      setTrucks(
-        (trucksData || []).map((t) => ({
-          ...t,
-          assigned_load: t.in_use
-            ? Array.from(loadMap.values()).find((l) => l.truck_id === t.id) || null
-            : null,
-        }))
-      );
-
-      setTrailers(
-        (trailersData || []).map((t) => ({
-          ...t,
-          assigned_load: t.in_use
-            ? Array.from(loadMap.values()).find((l) => l.trailer_id === t.id) || null
-            : null,
-        }))
-      );
+      setTrucks(trucksData || []);
+      setTrailers(trailersData || []);
     } catch (err) {
       console.error("Fleet fetch exception:", err);
       toast.error("Failed to load fleet data");
@@ -244,9 +221,8 @@ export default function FleetPage() {
                       <TableHead>Make / Model</TableHead>
                       <TableHead>Year</TableHead>
                       <TableHead>License Plate</TableHead>
-                      <TableHead>Maintenance</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Assigned Load</TableHead>
+                      <TableHead>Maintenance Notes</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -258,30 +234,21 @@ export default function FleetPage() {
                         <TableCell>{truck.year || "—"}</TableCell>
                         <TableCell>{truck.license_plate || "—"}</TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Badge
-                              variant={truck.maintenance_status === "in_service" ? "destructive" : "success"}
-                              className="cursor-pointer"
-                              onClick={() => toggleMaintenance("truck", truck.id, truck.maintenance_status || "available")}
-                            >
-                              {truck.maintenance_status === "in_service" ? "In Service" : "Available"}
-                            </Badge>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={truck.is_active ? "success" : "secondary"}>
-                            {truck.is_active ? "Active" : "Inactive"}
+                          <Badge
+                            variant={truck.maintenance_status === "in_service" ? "destructive" : "success"}
+                            className="cursor-pointer"
+                            onClick={() => toggleMaintenance("truck", truck.id, truck.maintenance_status || "available")}
+                          >
+                            {truck.maintenance_status === "in_service" ? "In Service" : "Available"}
                           </Badge>
                         </TableCell>
-                        <TableCell>
-                          {truck.assigned_load ? (
-                            <Badge variant="info" className="gap-1">
-                              <Package className="h-3 w-3" />
-                              {truck.assigned_load.reference_number}
-                            </Badge>
-                          ) : (
-                            <span className="text-muted-foreground text-sm">—</span>
-                          )}
+                        <TableCell className="max-w-[220px]">
+                          <span
+                            className="line-clamp-2 text-sm text-muted-foreground"
+                            title={truck.maintenance_notes || undefined}
+                          >
+                            {truck.maintenance_notes?.trim() || "—"}
+                          </span>
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-1">
@@ -335,9 +302,8 @@ export default function FleetPage() {
                       <TableHead>Type</TableHead>
                       <TableHead>Length (ft)</TableHead>
                       <TableHead>License Plate</TableHead>
-                      <TableHead>Maintenance</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Assigned Load</TableHead>
+                      <TableHead>Maintenance Notes</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -349,30 +315,21 @@ export default function FleetPage() {
                         <TableCell>{trailer.length_ft ? `${trailer.length_ft}'` : "—"}</TableCell>
                         <TableCell>{trailer.license_plate || "—"}</TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Badge
-                              variant={trailer.maintenance_status === "in_service" ? "destructive" : "success"}
-                              className="cursor-pointer"
-                              onClick={() => toggleMaintenance("trailer", trailer.id, trailer.maintenance_status || "available")}
-                            >
-                              {trailer.maintenance_status === "in_service" ? "In Service" : "Available"}
-                            </Badge>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={trailer.is_active ? "success" : "secondary"}>
-                            {trailer.is_active ? "Active" : "Inactive"}
+                          <Badge
+                            variant={trailer.maintenance_status === "in_service" ? "destructive" : "success"}
+                            className="cursor-pointer"
+                            onClick={() => toggleMaintenance("trailer", trailer.id, trailer.maintenance_status || "available")}
+                          >
+                            {trailer.maintenance_status === "in_service" ? "In Service" : "Available"}
                           </Badge>
                         </TableCell>
-                        <TableCell>
-                          {trailer.assigned_load ? (
-                            <Badge variant="info" className="gap-1">
-                              <Package className="h-3 w-3" />
-                              {trailer.assigned_load.reference_number}
-                            </Badge>
-                          ) : (
-                            <span className="text-muted-foreground text-sm">—</span>
-                          )}
+                        <TableCell className="max-w-[220px]">
+                          <span
+                            className="line-clamp-2 text-sm text-muted-foreground"
+                            title={trailer.maintenance_notes || undefined}
+                          >
+                            {trailer.maintenance_notes?.trim() || "—"}
+                          </span>
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-1">
@@ -428,7 +385,7 @@ export default function FleetPage() {
                 <Input name="vin" defaultValue={editTruck?.vin || ""} />
               </div>
               <div className="space-y-2">
-                <Label>Maintenance Status</Label>
+                <Label>Status (available / in service)</Label>
                 <Select name="maintenance_status" defaultValue={editTruck?.maintenance_status || "available"}>
                   <SelectTrigger>
                     <SelectValue />
@@ -488,7 +445,7 @@ export default function FleetPage() {
                 <Input name="license_plate" defaultValue={editTrailer?.license_plate || ""} />
               </div>
               <div className="space-y-2">
-                <Label>Maintenance Status</Label>
+                <Label>Status (available / in service)</Label>
                 <Select name="maintenance_status" defaultValue={editTrailer?.maintenance_status || "available"}>
                   <SelectTrigger>
                     <SelectValue />
