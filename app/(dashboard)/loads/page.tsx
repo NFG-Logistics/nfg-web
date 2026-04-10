@@ -11,22 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-  TabsContent,
-} from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -47,113 +32,127 @@ import {
   Plus,
   Search,
   Loader2,
-  Eye,
-  XCircle,
-  Package,
-  Truck,
-  MapPin,
-  Clock,
-  CheckCircle2,
+  Folder,
   FileText,
-  User as UserIcon,
-  ArrowRight,
-  ShieldCheck,
-  MessageSquare,
-  AlertTriangle,
+  CheckCircle2,
+  ChevronRight,
   ExternalLink,
+  MapPin,
+  Calendar,
+  User as UserIcon,
+  Package,
+  XCircle,
+  AlertTriangle,
+  Download,
 } from "lucide-react";
 import { toast } from "sonner";
-import type {
-  Load,
-  LoadStatus,
-  Stop,
-  Receipt,
-  StatusUpdate,
-} from "@/types";
+import type { Load, LoadStatus, Stop, Receipt, StatusUpdate } from "@/types";
 
 // ---------------------------------------------------------------------------
-// Active statuses (everything except delivered/cancelled)
+// Types
 // ---------------------------------------------------------------------------
-const ACTIVE_STATUSES: LoadStatus[] = [
-  "dispatched",
-  "on_site_shipper",
-  "loaded",
-  "on_site_receiver",
-  "empty",
-];
 
-// ---------------------------------------------------------------------------
-// Row type from the query
-// ---------------------------------------------------------------------------
 interface LoadRow extends Load {
-  driver: { full_name: string; phone?: string } | null;
-  dispatcher: { full_name: string } | null;
-  stops: Stop[];
-  receipts: Receipt[];
-  status_updates: StatusUpdate[];
-  reviewer: { full_name: string } | null;
+  driver?: { id: string; full_name: string } | null;
+  dispatcher?: { id: string; full_name: string } | null;
+  stops?: Stop[];
+  receipts?: Receipt[];
+  status_updates?: StatusUpdate[];
+}
+
+interface NavState {
+  year?: number;
+  driverId?: string;
+  driverName?: string;
+  loadId?: string;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function fmtDate(d: string | null | undefined) {
-  if (!d) return "—";
-  return new Date(d).toLocaleString("en-US", {
+
+function firstPickupStop(load: LoadRow): Stop | null {
+  return (
+    (load.stops || [])
+      .filter((s) => s.type === "pickup")
+      .sort((a, b) => a.stop_order - b.stop_order)[0] || null
+  );
+}
+
+function lastDeliveryStop(load: LoadRow): Stop | null {
+  const d = (load.stops || [])
+    .filter((s) => s.type === "delivery")
+    .sort((a, b) => a.stop_order - b.stop_order);
+  return d[d.length - 1] || null;
+}
+
+function pickupDate(load: LoadRow): Date {
+  const s = firstPickupStop(load);
+  if (s?.appointment_date) return new Date(s.appointment_date);
+  if (load.dispatched_at) return new Date(load.dispatched_at);
+  return new Date(load.created_at);
+}
+
+function loadYear(load: LoadRow): number {
+  return pickupDate(load).getFullYear();
+}
+
+function dateFolderLabel(date: Date): string {
+  const m = date.getMonth() + 1;
+  const d = date.getDate();
+  const y = date.getFullYear() % 100;
+  return `${m}-${d}-${y.toString().padStart(2, "0")}`;
+}
+
+function fmtDate(v: string | null | undefined): string {
+  if (!v) return "—";
+  return new Date(v).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
   });
 }
 
-function shortDate(d: string | null | undefined) {
-  if (!d) return "—";
-  return new Date(d).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
+function routeSummary(load: LoadRow) {
+  const p = firstPickupStop(load);
+  const d = lastDeliveryStop(load);
+  return {
+    from: p ? `${p.city}, ${p.state}` : "—",
+    to: d ? `${d.city}, ${d.state}` : "—",
+  };
 }
 
-function getPickupStop(stops: Stop[]) {
-  const sorted = [...stops].sort((a, b) => (a.stop_order ?? 0) - (b.stop_order ?? 0));
-  return sorted.find((s) => s.type === "pickup") ?? null;
+function driverName(load: LoadRow): string {
+  return load.driver?.full_name || "Unassigned";
 }
 
-function getDeliveryStop(stops: Stop[]) {
-  const sorted = [...stops].sort((a, b) => (b.stop_order ?? 0) - (a.stop_order ?? 0));
-  return sorted.find((s) => s.type === "delivery") ?? null;
+function driverId(load: LoadRow): string {
+  return load.driver?.id || "unassigned";
 }
 
-function fmtCityState(stop: Stop | null) {
-  if (!stop) return "—";
-  return [stop.city, stop.state].filter(Boolean).join(", ");
+function pods(load: LoadRow): Receipt[] {
+  return (load.receipts || []).filter(
+    (r) =>
+      r.receipt_type === "pod" ||
+      r.file_name?.toLowerCase().includes("pod")
+  );
 }
 
-function fmtStopDate(d: string | null | undefined) {
-  if (!d) return "—";
-  return new Date(d).toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-const STATUS_DOT_COLORS: Record<string, string> = {
+const STATUS_DOT: Record<string, string> = {
   dispatched: "bg-blue-500",
   on_site_shipper: "bg-amber-500",
   loaded: "bg-indigo-500",
   on_site_receiver: "bg-amber-500",
-  empty: "bg-slate-500",
+  empty: "bg-gray-400",
+  retake_requested: "bg-orange-500",
   delivered: "bg-emerald-500",
   cancelled: "bg-red-500",
 };
 
-// ============================================================================
-// PAGE
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
 export default function LoadsPage() {
   const supabase = useMemo(() => createClient(), []);
   const { user } = useUser();
@@ -161,460 +160,380 @@ export default function LoadsPage() {
   const [loads, setLoads] = useState<LoadRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [activeFilter, setActiveFilter] = useState<string>("all");
-  const [tab, setTab] = useState("active");
-  const [detailLoad, setDetailLoad] = useState<LoadRow | null>(null);
-  const [cancelLoad, setCancelLoad] = useState<LoadRow | null>(null);
+  const [nav, setNav] = useState<NavState>({});
+
+  const [cancelTarget, setCancelTarget] = useState<LoadRow | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // ── Fetch all loads ─────────────────────────────────────────────────
+  // ---- Fetch ---------------------------------------------------------------
+
   const fetchLoads = useCallback(async () => {
-    try {
-      // Try with reviewer FK join first
-      const { data, error } = await supabase
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("loads")
+      .select(
+        `*,
+         driver:users!loads_driver_id_fkey(id, full_name),
+         dispatcher:users!loads_dispatcher_id_fkey(id, full_name),
+         stops(*),
+         receipts(*),
+         status_updates(*)`
+      )
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Failed to fetch loads:", error);
+      const { data: fallback } = await supabase
         .from("loads")
-        .select(
-          `
-          *,
-          driver:users!loads_driver_id_fkey(full_name, phone),
-          dispatcher:users!loads_dispatcher_id_fkey(full_name),
-          reviewer:users!loads_reviewed_by_fkey(full_name),
-          stops(*),
-          receipts(*),
-          status_updates(*)
-        `
-        )
+        .select("*")
         .order("created_at", { ascending: false });
-
-      if (error) {
-        console.error("Loads fetch (with reviewer) error:", error);
-        // Fallback: try without reviewer join
-        const { data: fallback, error: fallbackErr } = await supabase
-          .from("loads")
-          .select(
-            `
-            *,
-            driver:users!loads_driver_id_fkey(full_name, phone),
-            dispatcher:users!loads_dispatcher_id_fkey(full_name),
-            stops(*),
-            receipts(*),
-            status_updates(*)
-          `
-          )
-          .order("created_at", { ascending: false });
-
-        if (fallbackErr) {
-          console.error("Loads fetch (fallback) error:", fallbackErr);
-          // Final fallback: simplest query
-          const { data: simple } = await supabase
-            .from("loads")
-            .select("*")
-            .order("created_at", { ascending: false });
-          setLoads(
-            ((simple as unknown as LoadRow[]) ?? []).map((l) => ({
-              ...l,
-              driver: null,
-              dispatcher: null,
-              reviewer: null,
-              stops: [],
-              receipts: [],
-              status_updates: [],
-            }))
-          );
-        } else {
-          setLoads(
-            ((fallback as unknown as LoadRow[]) ?? []).map((l) => ({
-              ...l,
-              reviewer: null,
-            }))
-          );
-        }
-      } else {
-        setLoads((data as unknown as LoadRow[]) ?? []);
-      }
-    } catch (err) {
-      console.error("Loads fetch exception:", err);
-      toast.error("Failed to load data");
-    } finally {
-      setLoading(false);
+      setLoads(
+        (fallback || []).map((l: Load) => ({
+          ...l,
+          driver: null,
+          dispatcher: null,
+          stops: [],
+          receipts: [],
+          status_updates: [],
+        }))
+      );
+    } else {
+      setLoads(data || []);
     }
+    setLoading(false);
   }, [supabase]);
 
   useEffect(() => {
     fetchLoads();
   }, [fetchLoads]);
 
-  // ── Real-time subscription ──────────────────────────────────────────
+  // ---- Realtime ------------------------------------------------------------
+
   useEffect(() => {
-    const channel = supabase
-      .channel("loads-tab-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "loads" },
-        () => fetchLoads()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "status_updates" },
-        () => fetchLoads()
-      )
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "receipts" },
-        () => fetchLoads()
-      )
+    const ch = supabase
+      .channel("loads-folder-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "loads" }, () => fetchLoads())
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "receipts" }, () => fetchLoads())
+      .on("postgres_changes", { event: "*", schema: "public", table: "status_updates" }, () => fetchLoads())
       .subscribe();
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(ch);
     };
   }, [supabase, fetchLoads]);
 
-  // ── Tab-filtered loads ──────────────────────────────────────────────
-  const activeLoads = useMemo(
-    () => loads.filter((l) => ACTIVE_STATUSES.includes(l.status as LoadStatus)),
-    [loads]
-  );
-  const completedLoads = useMemo(
-    () => loads.filter((l) => l.status === "delivered"),
-    [loads]
-  );
-  const cancelledLoads = useMemo(
-    () => loads.filter((l) => l.status === "cancelled"),
-    [loads]
-  );
+  // ---- Search filter -------------------------------------------------------
 
-  // Current tab's loads
-  const tabLoads = useMemo(() => {
-    if (tab === "active") {
-      if (activeFilter === "all") return activeLoads;
-      return activeLoads.filter((l) => l.status === activeFilter);
-    }
-    if (tab === "completed") return completedLoads;
-    return cancelledLoads;
-  }, [tab, activeFilter, activeLoads, completedLoads, cancelledLoads]);
-
-  // Search filter
-  const filtered = useMemo(
-    () =>
-      tabLoads.filter(
-        (l) =>
-          l.reference_number.toLowerCase().includes(search.toLowerCase()) ||
-          l.driver?.full_name?.toLowerCase().includes(search.toLowerCase())
-      ),
-    [tabLoads, search]
-  );
-
-  // ── CSV Export handler (Driver Schedule format) ─────────────────────
-  const handleExportCSV = async () => {
-    try {
-      // Fetch all loads with stops and driver info
-      const { data: allLoads, error } = await supabase
-        .from("loads")
-        .select(
-          `
-          *,
-          driver:users!loads_driver_id_fkey(full_name),
-          stops(type, city, state, appointment_date, stop_order)
-        `
-        )
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        toast.error(`Failed to fetch loads: ${error.message}`);
-        return;
-      }
-
-      // Helper to format date for CSV
-      const fmtDate = (d: string | null | undefined) => {
-        if (!d) return "";
-        return new Date(d).toLocaleDateString("en-US", {
-          month: "2-digit",
-          day: "2-digit",
-          year: "numeric",
-        });
-      };
-
-      // Process data for CSV — exact column order:
-      // Status | Pickup Date | Delivery Date | Company Name | Load Number |
-      // Pickup City, State | Delivery City, State | Driver | Note
-      const csvRows = allLoads.map((load: any) => {
-        const stops = [...(load.stops || [])].sort(
-          (a: any, b: any) => (a.stop_order ?? 0) - (b.stop_order ?? 0)
-        );
-        const pickupStop = stops.find((s: any) => s.type === "pickup");
-        const deliveryStop = [...stops].reverse().find((s: any) => s.type === "delivery");
-
-        const pickupCityState = pickupStop
-          ? [pickupStop.city, pickupStop.state].filter(Boolean).join(", ")
-          : "";
-        const deliveryCityState = deliveryStop
-          ? [deliveryStop.city, deliveryStop.state].filter(Boolean).join(", ")
-          : "";
-
-        return {
-          Status: load.status || "",
-          "Pickup Date": fmtDate(pickupStop?.appointment_date),
-          "Delivery Date": fmtDate(deliveryStop?.appointment_date),
-          "Company Name": load.client_name || "",
-          "Load Number": load.reference_number || "",
-          "Pickup City, State": pickupCityState,
-          "Delivery City, State": deliveryCityState,
-          Driver: load.driver?.full_name || "",
-          Note: load.special_instructions || "",
-        };
-      });
-
-      // Fixed column order
-      const headers = [
-        "Status",
-        "Pickup Date",
-        "Delivery Date",
-        "Company Name",
-        "Load Number",
-        "Pickup City, State",
-        "Delivery City, State",
-        "Driver",
-        "Note",
-      ];
-
-      // Escape CSV values
-      const escapeCSV = (value: any) => {
-        const str = String(value ?? "");
-        if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-          return `"${str.replace(/"/g, '""')}"`;
-        }
-        return str;
-      };
-
-      const csvContent = [
-        headers.join(","),
-        ...csvRows.map((row: any) =>
-          headers.map((header) => escapeCSV(row[header])).join(",")
-        ),
-      ].join("\n");
-
-      // Download
-      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-      const link = document.createElement("a");
-      const url = URL.createObjectURL(blob);
-      link.setAttribute("href", url);
-      link.setAttribute(
-        "download",
-        `driver-schedule-${new Date().toISOString().split("T")[0]}.csv`
+  const filtered = useMemo(() => {
+    if (!search.trim()) return loads;
+    const q = search.toLowerCase();
+    return loads.filter((l) => {
+      const r = routeSummary(l);
+      return (
+        l.reference_number?.toLowerCase().includes(q) ||
+        l.client_name?.toLowerCase().includes(q) ||
+        driverName(l).toLowerCase().includes(q) ||
+        r.from.toLowerCase().includes(q) ||
+        r.to.toLowerCase().includes(q) ||
+        (l.stops || []).some((s) => s.facility_name?.toLowerCase().includes(q)) ||
+        l.status?.toLowerCase().includes(q)
       );
-      link.style.visibility = "hidden";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+    });
+  }, [loads, search]);
 
-      toast.success("Driver schedule exported successfully");
-    } catch (err) {
-      toast.error(`Export failed: ${(err as Error).message}`);
+  // ---- Hierarchy -----------------------------------------------------------
+
+  const years = useMemo(() => {
+    const m = new Map<number, number>();
+    filtered.forEach((l) => {
+      const y = loadYear(l);
+      m.set(y, (m.get(y) || 0) + 1);
+    });
+    return Array.from(m.entries())
+      .sort(([a], [b]) => b - a)
+      .map(([year, count]) => ({ year, count }));
+  }, [filtered]);
+
+  const drivers = useMemo(() => {
+    if (nav.year === undefined) return [];
+    const m = new Map<string, { name: string; count: number }>();
+    filtered
+      .filter((l) => loadYear(l) === nav.year)
+      .forEach((l) => {
+        const id = driverId(l);
+        const name = driverName(l);
+        const prev = m.get(id);
+        m.set(id, { name: prev?.name || name, count: (prev?.count || 0) + 1 });
+      });
+    return Array.from(m.entries())
+      .sort(([, a], [, b]) => a.name.localeCompare(b.name))
+      .map(([id, { name, count }]) => ({ id, name, count }));
+  }, [filtered, nav.year]);
+
+  const driverLoads = useMemo(() => {
+    if (nav.year === undefined || !nav.driverId) return [];
+    return filtered
+      .filter((l) => loadYear(l) === nav.year && driverId(l) === nav.driverId)
+      .sort((a, b) => pickupDate(b).getTime() - pickupDate(a).getTime());
+  }, [filtered, nav.year, nav.driverId]);
+
+  const selectedLoad = useMemo(() => {
+    if (!nav.loadId) return null;
+    return loads.find((l) => l.id === nav.loadId) || null;
+  }, [loads, nav.loadId]);
+
+  const level: "root" | "year" | "driver" | "load" = nav.loadId
+    ? "load"
+    : nav.driverId
+      ? "driver"
+      : nav.year !== undefined
+        ? "year"
+        : "root";
+
+  // ---- Navigation ----------------------------------------------------------
+
+  const goRoot = () => setNav({});
+  const goYear = (y: number) => setNav({ year: y });
+  const goDriver = (id: string, name: string) =>
+    setNav({ year: nav.year, driverId: id, driverName: name });
+  const goLoad = (id: string) =>
+    setNav({ ...nav, loadId: id });
+
+  // ---- Actions -------------------------------------------------------------
+
+  const openRateConf = async (path: string) => {
+    const { data, error } = await supabase.storage
+      .from("rate-confirmations")
+      .createSignedUrl(path, 3600);
+    if (error || !data?.signedUrl) {
+      toast.error("Failed to open rate confirmation");
+      return;
     }
+    window.open(data.signedUrl, "_blank");
   };
 
-  // ── Cancel load handler ─────────────────────────────────────────────
   const handleCancel = async () => {
-    if (!cancelLoad || !cancelReason.trim()) return;
+    if (!cancelTarget) return;
     setSubmitting(true);
     const { error } = await supabase
       .from("loads")
-      .update({ status: "cancelled", cancel_reason: cancelReason.trim() })
-      .eq("id", cancelLoad.id);
-
-    if (error) toast.error(error.message);
-    else toast.success("Load cancelled");
-    setCancelLoad(null);
-    setCancelReason("");
+      .update({
+        status: "cancelled" as LoadStatus,
+        cancel_reason: cancelReason || null,
+      })
+      .eq("id", cancelTarget.id);
     setSubmitting(false);
-    fetchLoads();
+    if (error) {
+      toast.error("Failed to cancel load");
+    } else {
+      toast.success("Load cancelled");
+      setCancelTarget(null);
+      setCancelReason("");
+      fetchLoads();
+    }
   };
 
-  // ── Open detail and re-fetch latest data for that load ──────────────
-  const openDetail = useCallback(
-    async (load: LoadRow) => {
-      setDetailLoad(load);
-      // Re-fetch to ensure we have latest review info
-      const { data } = await supabase
-        .from("loads")
-        .select(
-          `
-          *,
-          driver:users!loads_driver_id_fkey(full_name, phone),
-          dispatcher:users!loads_dispatcher_id_fkey(full_name),
-          stops(*),
-          receipts(*),
-          status_updates(*)
-        `
-        )
-        .eq("id", load.id)
-        .single();
-      if (data) {
-        // Try to get reviewer name
-        let reviewer: { full_name: string } | null = null;
-        if ((data as any).reviewed_by) {
-          const { data: rev } = await supabase
-            .from("users")
-            .select("full_name")
-            .eq("id", (data as any).reviewed_by)
-            .single();
-          reviewer = rev;
-        }
-        setDetailLoad({ ...(data as unknown as LoadRow), reviewer });
-      }
-    },
-    [supabase]
-  );
+  const updatePayment = async (loadId: string, status: string) => {
+    const { error } = await supabase
+      .from("loads")
+      .update({ payment_status: status })
+      .eq("id", loadId);
+    if (error) toast.error("Failed to update payment status");
+    else {
+      toast.success(`Payment marked as ${status}`);
+      fetchLoads();
+    }
+  };
+
+  const exportCSV = useCallback(() => {
+    if (filtered.length === 0) {
+      toast.error("Nothing to export");
+      return;
+    }
+    const rows = filtered.map((l) => {
+      const r = routeSummary(l);
+      return [
+        l.reference_number,
+        driverName(l),
+        l.client_name || "",
+        r.from,
+        r.to,
+        fmtDate(pickupDate(l).toISOString()),
+        l.rate,
+        STATUS_CONFIG[l.status]?.label || l.status,
+        PAYMENT_CONFIG[l.payment_status]?.label || l.payment_status,
+      ];
+    });
+    const header = [
+      "Load #",
+      "Driver",
+      "Client",
+      "Pickup",
+      "Delivery",
+      "Pickup Date",
+      "Rate",
+      "Status",
+      "Payment",
+    ];
+    const csv = [header, ...rows]
+      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `loads-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filtered]);
+
+  // ---- Render --------------------------------------------------------------
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <PageHeader title="Loads" description="Manage all loads and shipments">
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={handleExportCSV}>
-            <FileText className="mr-2 h-4 w-4" /> Export Schedule
+      {/* Header */}
+      <PageHeader title="Loads" description="Browse and manage load files">
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={exportCSV}>
+            <Download className="mr-2 h-4 w-4" />
+            Export
           </Button>
-          <Button asChild>
-            <Link href="/loads/dispatch">
-              <Plus className="mr-2 h-4 w-4" /> Dispatch Driver
-            </Link>
-          </Button>
+          <Link href="/loads/dispatch">
+            <Button size="sm">
+              <Plus className="mr-2 h-4 w-4" />
+              Dispatch Load
+            </Button>
+          </Link>
         </div>
       </PageHeader>
 
-      {/* ── Tabs: Active / Completed / Cancelled ───────────────────────── */}
-      <Tabs value={tab} onValueChange={setTab}>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <TabsList>
-            <TabsTrigger value="active" className="gap-1.5">
-              <Package className="h-4 w-4" />
-              Active
-              <Badge variant="secondary" className="ml-1 text-xs px-1.5 py-0">
-                {activeLoads.length}
-              </Badge>
-            </TabsTrigger>
-            <TabsTrigger value="completed" className="gap-1.5">
-              <CheckCircle2 className="h-4 w-4" />
-              Completed
-              <Badge variant="secondary" className="ml-1 text-xs px-1.5 py-0">
-                {completedLoads.length}
-              </Badge>
-            </TabsTrigger>
-            <TabsTrigger value="cancelled" className="gap-1.5">
-              <XCircle className="h-4 w-4" />
-              Cancelled
-              <Badge variant="secondary" className="ml-1 text-xs px-1.5 py-0">
-                {cancelledLoads.length}
-              </Badge>
-            </TabsTrigger>
-          </TabsList>
+      {/* Breadcrumb */}
+      <nav className="flex items-center gap-1.5 text-sm flex-wrap">
+        <button
+          onClick={goRoot}
+          className={`flex items-center gap-1 hover:text-foreground transition-colors ${
+            level === "root"
+              ? "font-semibold text-foreground"
+              : "text-muted-foreground"
+          }`}
+        >
+          <Folder className="h-4 w-4" />
+          Loads
+        </button>
 
-          {/* Search + filter (active-specific filter only shown on active tab) */}
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search loads..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-9 w-[220px]"
-              />
-            </div>
-            {tab === "active" && (
-              <Select value={activeFilter} onValueChange={setActiveFilter}>
-                <SelectTrigger className="w-[180px]">
-                  <SelectValue placeholder="All Active" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Active</SelectItem>
-                  {ACTIVE_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {STATUS_CONFIG[s].label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-        </div>
+        {nav.year !== undefined && (
+          <>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
+            <button
+              onClick={() => goYear(nav.year!)}
+              className={`hover:text-foreground transition-colors ${
+                level === "year"
+                  ? "font-semibold text-foreground"
+                  : "text-muted-foreground"
+              }`}
+            >
+              {nav.year}
+            </button>
+          </>
+        )}
 
-        {/* ── Active Tab ─────────────────────────────────────────────── */}
-        <TabsContent value="active">
-          <LoadsTable
-            loads={filtered}
-            loading={loading}
-            tab="active"
-            onView={openDetail}
-            onCancel={setCancelLoad}
-            onUpdate={fetchLoads}
-          />
-        </TabsContent>
+        {nav.driverName && (
+          <>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
+            <button
+              onClick={() => goDriver(nav.driverId!, nav.driverName!)}
+              className={`hover:text-foreground transition-colors ${
+                level === "driver"
+                  ? "font-semibold text-foreground"
+                  : "text-muted-foreground"
+              }`}
+            >
+              {nav.driverName}
+            </button>
+          </>
+        )}
 
-        {/* ── Completed Tab ──────────────────────────────────────────── */}
-        <TabsContent value="completed">
-          <LoadsTable
-            loads={filtered}
-            loading={loading}
-            tab="completed"
-            onView={openDetail}
-            onUpdate={fetchLoads}
-          />
-        </TabsContent>
+        {selectedLoad && (
+          <>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
+            <span className="font-semibold text-foreground">
+              {dateFolderLabel(pickupDate(selectedLoad))}
+            </span>
+          </>
+        )}
+      </nav>
 
-        {/* ── Cancelled Tab ──────────────────────────────────────────── */}
-        <TabsContent value="cancelled">
-          <LoadsTable
-            loads={filtered}
-            loading={loading}
-            tab="cancelled"
-            onView={openDetail}
-            onUpdate={fetchLoads}
-          />
-        </TabsContent>
-      </Tabs>
+      {/* Search */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Search loads, drivers, locations…"
+          className="pl-10"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
 
-      {/* ── Detail Dialog ──────────────────────────────────────────────── */}
-      <LoadDetailDialog
-        load={detailLoad}
-        open={!!detailLoad}
-        onClose={() => setDetailLoad(null)}
-      />
+      {/* Folder views */}
+      {level === "root" && <YearGrid years={years} onSelect={goYear} />}
+      {level === "year" && <DriverGrid drivers={drivers} onSelect={goDriver} />}
+      {level === "driver" && (
+        <DateGrid loads={driverLoads} onSelect={goLoad} />
+      )}
+      {level === "load" && selectedLoad && (
+        <LoadDetail
+          load={selectedLoad}
+          onOpenRateConf={openRateConf}
+          onCancel={() => setCancelTarget(selectedLoad)}
+          onPaymentChange={updatePayment}
+        />
+      )}
 
-      {/* ── Cancel Dialog ──────────────────────────────────────────────── */}
+      {/* Cancel dialog */}
       <Dialog
-        open={!!cancelLoad}
-        onOpenChange={() => {
-          setCancelLoad(null);
-          setCancelReason("");
+        open={!!cancelTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCancelTarget(null);
+            setCancelReason("");
+          }
         }}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Cancel Load {cancelLoad?.reference_number}</DialogTitle>
+            <DialogTitle>Cancel Load</DialogTitle>
             <DialogDescription>
-              This action cannot be undone. A reason is required.
+              This will cancel load {cancelTarget?.reference_number}. This
+              action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label>Cancellation Reason</Label>
+            <Label>Reason (optional)</Label>
             <Textarea
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
-              placeholder="Explain why this load is being cancelled..."
-              required
+              placeholder="Why is this load being cancelled?"
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelLoad(null)}>
+            <Button variant="outline" onClick={() => setCancelTarget(null)}>
               Keep Load
             </Button>
             <Button
               variant="destructive"
               onClick={handleCancel}
-              disabled={!cancelReason.trim() || submitting}
+              disabled={submitting}
             >
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              <XCircle className="mr-2 h-4 w-4" />
               Cancel Load
             </Button>
           </DialogFooter>
@@ -624,628 +543,498 @@ export default function LoadsPage() {
   );
 }
 
-// ============================================================================
-// LOADS TABLE (reusable across all three tabs)
-// ============================================================================
-function LoadsTable({
-  loads,
-  loading,
-  tab,
-  onView,
-  onCancel,
-  onUpdate,
-}: {
-  loads: LoadRow[];
-  loading: boolean;
-  tab: "active" | "completed" | "cancelled";
-  onView: (l: LoadRow) => void;
-  onCancel?: (l: LoadRow) => void;
-  onUpdate: () => void;
-}) {
-  if (loading) {
-    return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-16">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </CardContent>
-      </Card>
-    );
-  }
+// ==========================================================================
+// Sub-components
+// ==========================================================================
 
-  if (loads.length === 0) {
+// ---- Year folders ----------------------------------------------------------
+
+function YearGrid({
+  years,
+  onSelect,
+}: {
+  years: { year: number; count: number }[];
+  onSelect: (y: number) => void;
+}) {
+  if (years.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-          <Package className="h-12 w-12 mb-3 opacity-40" />
-          <p className="text-sm">
-            {tab === "active" && "No active loads"}
-            {tab === "completed" && "No completed loads yet"}
-            {tab === "cancelled" && "No cancelled loads"}
-          </p>
-        </CardContent>
-      </Card>
+      <EmptyState
+        icon={<Package className="h-12 w-12" />}
+        title="No loads yet"
+        subtitle="Dispatch your first load to get started."
+      />
     );
   }
 
   return (
-    <Card>
-      <CardContent className="p-0">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-muted/30">
-              <TableHead className="font-semibold">
-                {tab === "completed" ? "Payment" : "Status"}
-              </TableHead>
-              <TableHead className="font-semibold">Pickup Date</TableHead>
-              <TableHead className="font-semibold">Delivery Date</TableHead>
-              <TableHead className="font-semibold">Company Name</TableHead>
-              <TableHead className="font-semibold">Load Number</TableHead>
-              <TableHead className="font-semibold">Pickup City, State</TableHead>
-              <TableHead className="font-semibold">Delivery City, State</TableHead>
-              <TableHead className="font-semibold">Driver</TableHead>
-              <TableHead className="font-semibold text-right">Rate</TableHead>
-              <TableHead className="font-semibold text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loads.map((load) => {
-              const sCfg = STATUS_CONFIG[load.status as LoadStatus];
-              const pickup = getPickupStop(load.stops ?? []);
-              const delivery = getDeliveryStop(load.stops ?? []);
-
-              return (
-                <TableRow key={load.id}>
-                  <TableCell>
-                    {tab === "completed" ? (
-                      <PaymentStatusDropdown load={load} onUpdate={onUpdate} />
-                    ) : (
-                      <Badge variant={sCfg?.variant}>{sCfg?.label}</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-sm whitespace-nowrap">
-                    {fmtStopDate(pickup?.appointment_date)}
-                  </TableCell>
-                  <TableCell className="text-sm whitespace-nowrap">
-                    {fmtStopDate(delivery?.appointment_date)}
-                  </TableCell>
-                  <TableCell className="font-medium">
-                    {load.client_name || "—"}
-                  </TableCell>
-                  <TableCell className="font-medium">
-                    {load.reference_number}
-                  </TableCell>
-                  <TableCell className="text-sm whitespace-nowrap">
-                    {fmtCityState(pickup)}
-                  </TableCell>
-                  <TableCell className="text-sm whitespace-nowrap">
-                    {fmtCityState(delivery)}
-                  </TableCell>
-                  <TableCell>{load.driver?.full_name || "—"}</TableCell>
-                  <TableCell className="text-right font-medium">
-                    ${Number(load.rate).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => onView(load)}
-                      >
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      {tab === "active" &&
-                        onCancel &&
-                        !["delivered", "cancelled"].includes(load.status) && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => onCancel(load)}
-                          >
-                            <XCircle className="h-4 w-4 text-destructive" />
-                          </Button>
-                        )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+      {years.map(({ year, count }) => (
+        <button
+          key={year}
+          onClick={() => onSelect(year)}
+          className="group flex flex-col items-center gap-2 p-6 rounded-xl border bg-card hover:bg-accent hover:border-primary/30 transition-all"
+        >
+          <Folder className="h-14 w-14 text-blue-500 group-hover:text-blue-600 transition-colors" />
+          <span className="font-semibold text-lg">{year}</span>
+          <span className="text-xs text-muted-foreground">
+            {count} load{count !== 1 && "s"}
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 
-// ============================================================================
-// LOAD DETAIL DIALOG (updated with review section)
-// ============================================================================
-function LoadDetailDialog({
-  load,
-  open,
-  onClose,
+// ---- Driver folders --------------------------------------------------------
+
+function DriverGrid({
+  drivers,
+  onSelect,
 }: {
-  load: LoadRow | null;
-  open: boolean;
-  onClose: () => void;
+  drivers: { id: string; name: string; count: number }[];
+  onSelect: (id: string, name: string) => void;
 }) {
-  const supabase = useMemo(() => createClient(), []);
-  const [rcLoading, setRcLoading] = useState(false);
-
-  const handleViewRateConfirmation = async () => {
-    if (!load?.rate_confirmation_path) return;
-    setRcLoading(true);
-    const { data, error } = await supabase.storage
-      .from("rate-confirmations")
-      .createSignedUrl(load.rate_confirmation_path, 3600);
-    setRcLoading(false);
-    if (data?.signedUrl) {
-      window.open(data.signedUrl, "_blank");
-    } else {
-      toast.error("Failed to load rate confirmation");
-    }
-  };
-
-  if (!load) return null;
-
-  const stops = [...(load.stops ?? [])].sort(
-    (a, b) => a.stop_order - b.stop_order
-  );
-  const updates = [...(load.status_updates ?? [])].sort(
-    (a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  );
-  const receipts = load.receipts ?? [];
-  const hasReview =
-    load.reviewed_by || load.reviewed_at || load.review_feedback;
+  if (drivers.length === 0) {
+    return (
+      <EmptyState
+        icon={<UserIcon className="h-12 w-12" />}
+        title="No drivers found"
+        subtitle="No loads match your search for this year."
+      />
+    );
+  }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[90vh] p-0 gap-0">
-        <DialogHeader className="px-6 pt-6 pb-4">
-          <DialogTitle className="flex items-center gap-2 text-lg">
-            <Package className="h-5 w-5 text-primary" />
-            Load {load.reference_number}
-          </DialogTitle>
-          <DialogDescription>Full load details and history.</DialogDescription>
-        </DialogHeader>
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+      {drivers.map(({ id, name, count }) => (
+        <button
+          key={id}
+          onClick={() => onSelect(id, name)}
+          className="group flex flex-col items-center gap-2 p-6 rounded-xl border bg-card hover:bg-accent hover:border-primary/30 transition-all"
+        >
+          <Folder className="h-14 w-14 text-emerald-500 group-hover:text-emerald-600 transition-colors" />
+          <span className="font-medium text-sm text-center leading-tight">
+            {name}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {count} load{count !== 1 && "s"}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
 
-        <Separator />
+// ---- Date folders (loads for a specific driver) ----------------------------
 
-        <ScrollArea className="max-h-[calc(90vh-120px)]">
-          <div className="px-6 py-4 space-y-5">
-            {/* ── Overview ───────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 gap-4">
-              <DetailItem
-                icon={<Truck className="h-4 w-4" />}
-                label="Status"
-                value={
-                  <Badge variant={STATUS_CONFIG[load.status]?.variant}>
-                    {STATUS_CONFIG[load.status]?.label}
-                  </Badge>
-                }
-              />
-              <DetailItem
-                icon={<FileText className="h-4 w-4" />}
-                label="Payment"
-                value={
-                  <Badge variant={PAYMENT_CONFIG[load.payment_status]?.variant}>
-                    {PAYMENT_CONFIG[load.payment_status]?.label}
-                  </Badge>
-                }
-              />
-              <DetailItem
-                icon={<UserIcon className="h-4 w-4" />}
-                label="Driver"
-                value={load.driver?.full_name ?? "Unassigned"}
-              />
-              <DetailItem
-                icon={<UserIcon className="h-4 w-4" />}
-                label="Dispatcher"
-                value={load.dispatcher?.full_name ?? "—"}
-              />
-              <DetailItem
-                icon={<Package className="h-4 w-4" />}
-                label="Rate"
-                value={`$${Number(load.rate).toLocaleString()}`}
-              />
-              {load.equipment_type && (
-                <DetailItem
-                  icon={<Truck className="h-4 w-4" />}
-                  label="Equipment"
-                  value={load.equipment_type}
-                />
-              )}
-              {load.weight_lbs != null && (
-                <DetailItem
-                  icon={<Package className="h-4 w-4" />}
-                  label="Weight"
-                  value={`${load.weight_lbs.toLocaleString()} lbs`}
-                />
-              )}
-              <DetailItem
-                icon={<Clock className="h-4 w-4" />}
-                label="Dispatched"
-                value={fmtDate(load.dispatched_at)}
-              />
-              {load.completed_at && (
-                <DetailItem
-                  icon={<CheckCircle2 className="h-4 w-4 text-emerald-500" />}
-                  label="Completed"
-                  value={fmtDate(load.completed_at)}
-                />
-              )}
-              {load.cancelled_at && (
-                <DetailItem
-                  icon={<XCircle className="h-4 w-4 text-red-500" />}
-                  label="Cancelled"
-                  value={fmtDate(load.cancelled_at)}
-                />
+function DateGrid({
+  loads,
+  onSelect,
+}: {
+  loads: LoadRow[];
+  onSelect: (id: string) => void;
+}) {
+  if (loads.length === 0) {
+    return (
+      <EmptyState
+        icon={<Calendar className="h-12 w-12" />}
+        title="No loads found"
+        subtitle="No loads match your search for this driver."
+      />
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      {loads.map((load) => {
+        const pd = pickupDate(load);
+        const r = routeSummary(load);
+        const cfg = STATUS_CONFIG[load.status];
+        const hasRC = !!load.rate_confirmation_path;
+        const podCount = pods(load).length;
+
+        return (
+          <button
+            key={load.id}
+            onClick={() => onSelect(load.id)}
+            className="group text-left p-4 rounded-xl border bg-card hover:bg-accent hover:border-primary/30 transition-all"
+          >
+            <div className="flex items-start gap-3">
+              <Folder className="h-10 w-10 text-amber-500 group-hover:text-amber-600 transition-colors shrink-0 mt-0.5" />
+              <div className="min-w-0 flex-1 space-y-1">
+                <p className="font-semibold">{dateFolderLabel(pd)}</p>
+                <p className="text-xs text-muted-foreground truncate">
+                  #{load.reference_number}
+                  {load.client_name && ` · ${load.client_name}`}
+                </p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {r.from} → {r.to}
+                </p>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <span
+                    className={`inline-block w-2 h-2 rounded-full ${
+                      STATUS_DOT[load.status] || "bg-gray-400"
+                    }`}
+                  />
+                  <span className="text-xs">{cfg?.label || load.status}</span>
+                </div>
+
+                {(hasRC || podCount > 0) && (
+                  <div className="flex items-center gap-3 text-[11px] text-muted-foreground pt-0.5">
+                    {hasRC && (
+                      <span className="flex items-center gap-0.5">
+                        <FileText className="h-3 w-3" /> Rate Conf
+                      </span>
+                    )}
+                    {podCount > 0 && (
+                      <span className="flex items-center gap-0.5">
+                        <CheckCircle2 className="h-3 w-3" /> POD
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---- Load detail (inside a date folder) ------------------------------------
+
+function LoadDetail({
+  load,
+  onOpenRateConf,
+  onCancel,
+  onPaymentChange,
+}: {
+  load: LoadRow;
+  onOpenRateConf: (path: string) => void;
+  onCancel: () => void;
+  onPaymentChange: (loadId: string, status: string) => void;
+}) {
+  const r = routeSummary(load);
+  const sCfg = STATUS_CONFIG[load.status];
+  const pCfg = PAYMENT_CONFIG[load.payment_status];
+  const loadPods = pods(load);
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      {/* Summary card */}
+      <Card>
+        <CardContent className="pt-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold">
+                Load #{load.reference_number}
+              </h2>
+              {load.client_name && (
+                <p className="text-sm text-muted-foreground">
+                  {load.client_name}
+                </p>
               )}
             </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant={sCfg?.variant || "default"}>
+                {sCfg?.label || load.status}
+              </Badge>
+              <Badge variant={pCfg?.variant || "default"}>
+                {pCfg?.label || load.payment_status}
+              </Badge>
+            </div>
+          </div>
 
-            {load.rate_confirmation_path && (
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={handleViewRateConfirmation}
-                disabled={rcLoading}
-              >
-                {rcLoading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                )}
-                View Rate Confirmation
-              </Button>
+          <Separator />
+
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+            <DetailItem label="Rate">
+              $
+              {Number(load.rate).toLocaleString("en-US", {
+                minimumFractionDigits: 2,
+              })}
+            </DetailItem>
+            <DetailItem label="Driver">{driverName(load)}</DetailItem>
+            <DetailItem label="Dispatched">
+              {fmtDate(load.dispatched_at)}
+            </DetailItem>
+            {load.completed_at && (
+              <DetailItem label="Completed">
+                {fmtDate(load.completed_at)}
+              </DetailItem>
             )}
+          </div>
 
-            {load.special_instructions && (
-              <div className="rounded-lg border bg-blue-50/50 p-3 dark:bg-blue-950/20">
-                <p className="text-xs font-medium text-muted-foreground mb-1">
+          {load.special_instructions && (
+            <>
+              <Separator />
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">
                   Special Instructions
                 </p>
                 <p className="text-sm">{load.special_instructions}</p>
               </div>
-            )}
+            </>
+          )}
 
-            {/* ── Review Section ──────────────────────────────────────── */}
-            {hasReview && (
-              <>
-                <Separator />
-                <div>
-                  <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-primary" />
-                    Admin Review
-                  </h4>
-                  <div className="rounded-lg border bg-slate-50/50 p-4 dark:bg-slate-950/20 space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      {load.reviewer?.full_name && (
-                        <div>
-                          <p className="text-xs text-muted-foreground">
-                            Reviewed By
-                          </p>
-                          <p className="text-sm font-medium flex items-center gap-1.5">
-                            <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-                            {load.reviewer.full_name}
-                          </p>
-                        </div>
-                      )}
-                      {!load.reviewer?.full_name && load.reviewed_by && (
-                        <div>
-                          <p className="text-xs text-muted-foreground">
-                            Reviewed By
-                          </p>
-                          <p className="text-sm font-medium">Admin</p>
-                        </div>
-                      )}
-                      {load.reviewed_at && (
-                        <div>
-                          <p className="text-xs text-muted-foreground">
-                            Reviewed At
-                          </p>
-                          <p className="text-sm font-medium">
-                            {fmtDate(load.reviewed_at)}
-                          </p>
-                        </div>
-                      )}
+          {load.status !== "cancelled" && (
+            <>
+              <Separator />
+              <div className="flex items-center gap-3">
+                <p className="text-sm text-muted-foreground">Payment:</p>
+                <Select
+                  value={load.payment_status}
+                  onValueChange={(v) => onPaymentChange(load.id, v)}
+                >
+                  <SelectTrigger className="w-[140px] h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unpaid">Unpaid</SelectItem>
+                    <SelectItem value="invoiced">Invoiced</SelectItem>
+                    <SelectItem value="paid">Paid</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Route */}
+      <Card>
+        <CardContent className="pt-6">
+          <h3 className="font-semibold mb-4 flex items-center gap-2">
+            <MapPin className="h-4 w-4" /> Route
+          </h3>
+          <div className="space-y-4">
+            {(load.stops || [])
+              .sort((a, b) => a.stop_order - b.stop_order)
+              .map((stop, i) => (
+                <div key={stop.id} className="flex gap-3">
+                  <div className="flex flex-col items-center">
+                    <div
+                      className={`w-3 h-3 rounded-full shrink-0 ${
+                        stop.type === "pickup"
+                          ? "bg-blue-500"
+                          : "bg-emerald-500"
+                      }`}
+                    />
+                    {i < (load.stops?.length || 0) - 1 && (
+                      <div className="w-px flex-1 bg-border mt-1" />
+                    )}
+                  </div>
+                  <div className="pb-4">
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant={
+                          stop.type === "pickup" ? "info" : "success"
+                        }
+                        className="text-[10px] px-1.5 py-0"
+                      >
+                        {stop.type === "pickup" ? "Pickup" : "Delivery"}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {fmtDate(stop.appointment_date)}
+                      </span>
                     </div>
-                    {load.review_feedback && (
-                      <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900 dark:bg-amber-950/20">
-                        <p className="text-xs font-medium text-amber-700 dark:text-amber-300 mb-1 flex items-center gap-1.5">
-                          <MessageSquare className="h-3.5 w-3.5" />
-                          Review Feedback
-                        </p>
-                        <p className="text-sm">{load.review_feedback}</p>
-                      </div>
+                    <p className="font-medium text-sm mt-1">
+                      {stop.facility_name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {stop.address}, {stop.city}, {stop.state} {stop.zip}
+                    </p>
+                    {stop.contact_name && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Contact: {stop.contact_name}
+                        {stop.contact_phone && ` (${stop.contact_phone})`}
+                      </p>
                     )}
                   </div>
                 </div>
-              </>
-            )}
-
-            {/* ── Cancel reason ───────────────────────────────────────── */}
-            {load.cancel_reason && (
-              <div className="rounded-lg border border-red-200 bg-red-50/50 p-3 dark:border-red-900 dark:bg-red-950/20">
-                <p className="text-xs font-medium text-red-700 dark:text-red-300 mb-1 flex items-center gap-1.5">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  Cancel Reason
-                </p>
-                <p className="text-sm">{load.cancel_reason}</p>
-              </div>
-            )}
-
-            {/* ── Stops ──────────────────────────────────────────────── */}
-            {stops.length > 0 && (
-              <>
-                <Separator />
-                <div>
-                  <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
-                    <MapPin className="h-4 w-4 text-primary" />
-                    Stops
-                  </h4>
-                  <div className="space-y-0">
-                    {stops.map((stop, idx) => {
-                      const isPickup = stop.type === "pickup";
-                      const dotColor = isPickup
-                        ? "bg-emerald-500"
-                        : "bg-red-500";
-                      const isLast = idx === stops.length - 1;
-
-                      return (
-                        <div key={stop.id} className="flex gap-3">
-                          <div className="flex flex-col items-center">
-                            <div
-                              className={`h-3 w-3 rounded-full ${dotColor} mt-1.5 ring-2 ring-white dark:ring-card`}
-                            />
-                            {!isLast && (
-                              <div className="w-0.5 flex-1 bg-border" />
-                            )}
-                          </div>
-                          <div className="pb-4 flex-1">
-                            <div className="flex items-center gap-2">
-                              <Badge
-                                variant={isPickup ? "success" : "destructive"}
-                                className="text-[10px] px-1.5 py-0"
-                              >
-                                {isPickup ? "Pickup" : "Delivery"}
-                              </Badge>
-                              <Badge
-                                variant="outline"
-                                className="text-[10px] px-1.5 py-0"
-                              >
-                                Stop {stop.stop_order}
-                              </Badge>
-                              <Badge
-                                variant={
-                                  stop.status === "completed"
-                                    ? "success"
-                                    : stop.status === "arrived"
-                                    ? "warning"
-                                    : "secondary"
-                                }
-                                className="text-[10px] px-1.5 py-0"
-                              >
-                                {stop.status}
-                              </Badge>
-                            </div>
-                            <p className="text-sm font-medium mt-1">
-                              {stop.facility_name}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {stop.address}, {stop.city}, {stop.state}{" "}
-                              {stop.zip}
-                            </p>
-                            {(stop.arrival_at || stop.departure_at) && (
-                              <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
-                                {stop.arrival_at && (
-                                  <span>Arrived: {fmtDate(stop.arrival_at)}</span>
-                                )}
-                                {stop.departure_at && (
-                                  <span>
-                                    Departed: {fmtDate(stop.departure_at)}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* ── Receipts / PODs ─────────────────────────────────────── */}
-            {receipts.length > 0 && (
-              <>
-                <Separator />
-                <div>
-                  <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-primary" />
-                    Receipts / PODs
-                  </h4>
-                  <div className="space-y-2">
-                    {receipts.map((r) => (
-                      <div
-                        key={r.id}
-                        className="flex items-center justify-between rounded-lg border p-3"
-                      >
-                        <div>
-                          <p className="text-sm font-medium">
-                            {r.no_pod_available
-                              ? "No POD Available"
-                              : r.file_name ?? "POD Document"}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {r.signed_by && `Signed by: ${r.signed_by} · `}
-                            {fmtDate(r.created_at)}
-                          </p>
-                        </div>
-                        {r.file_url && (
-                          <Button variant="ghost" size="sm" asChild>
-                            <a
-                              href={r.file_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              View
-                            </a>
-                          </Button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* ── Status History ──────────────────────────────────────── */}
-            {updates.length > 0 && (
-              <>
-                <Separator />
-                <div>
-                  <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-primary" />
-                    Status History
-                  </h4>
-                  <div className="space-y-2">
-                    {updates.map((u) => {
-                      const prevCfg = u.previous_status
-                        ? STATUS_CONFIG[u.previous_status]
-                        : null;
-                      const newCfg = STATUS_CONFIG[u.new_status];
-                      return (
-                        <div
-                          key={u.id}
-                          className="flex items-start gap-3 rounded-lg border p-2.5"
-                        >
-                          <div
-                            className={`mt-1 h-2.5 w-2.5 rounded-full flex-shrink-0 ${
-                              STATUS_DOT_COLORS[u.new_status] ?? "bg-gray-400"
-                            }`}
-                          />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {prevCfg && (
-                                <>
-                                  <Badge
-                                    variant={prevCfg.variant}
-                                    className="text-[10px] px-1.5 py-0"
-                                  >
-                                    {prevCfg.label}
-                                  </Badge>
-                                  <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                                </>
-                              )}
-                              {newCfg ? (
-                                <Badge
-                                  variant={newCfg.variant}
-                                  className="text-[10px] px-1.5 py-0"
-                                >
-                                  {newCfg.label}
-                                </Badge>
-                              ) : (
-                                <Badge
-                                  variant="secondary"
-                                  className="text-[10px] px-1.5 py-0"
-                                >
-                                  {u.new_status ?? "Unknown"}
-                                </Badge>
-                              )}
-                            </div>
-                            {u.notes && (
-                              <p className="text-xs text-muted-foreground mt-1 italic">
-                                {u.notes}
-                              </p>
-                            )}
-                          </div>
-                          <p className="text-[11px] text-muted-foreground whitespace-nowrap">
-                            {fmtDate(u.created_at)}
-                          </p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </>
+              ))}
+            {(!load.stops || load.stops.length === 0) && (
+              <p className="text-sm text-muted-foreground">
+                No route information available.
+              </p>
             )}
           </div>
-        </ScrollArea>
-      </DialogContent>
-    </Dialog>
+        </CardContent>
+      </Card>
+
+      {/* Documents */}
+      <Card>
+        <CardContent className="pt-6">
+          <h3 className="font-semibold mb-4 flex items-center gap-2">
+            <FileText className="h-4 w-4" /> Documents
+          </h3>
+          <div className="space-y-3">
+            {/* Rate Confirmation */}
+            <FileRow
+              icon={
+                <FileText className="h-8 w-8 text-blue-500 shrink-0" />
+              }
+              name="Rate Confirmation"
+              detail={
+                load.rate_confirmation_path ? "Uploaded" : "Not uploaded"
+              }
+              actionLabel="View"
+              onAction={
+                load.rate_confirmation_path
+                  ? () => onOpenRateConf(load.rate_confirmation_path!)
+                  : undefined
+              }
+            />
+
+            {/* PODs */}
+            {loadPods.length > 0 ? (
+              loadPods.map((pod) => (
+                <FileRow
+                  key={pod.id}
+                  icon={
+                    <CheckCircle2 className="h-8 w-8 text-emerald-500 shrink-0" />
+                  }
+                  name="Proof of Delivery"
+                  detail={`${pod.file_name || "POD"} · ${fmtDate(pod.created_at)}`}
+                  actionLabel="View"
+                  onAction={
+                    pod.file_url
+                      ? () => window.open(pod.file_url!, "_blank")
+                      : undefined
+                  }
+                />
+              ))
+            ) : (
+              <FileRow
+                icon={
+                  <CheckCircle2 className="h-8 w-8 text-muted-foreground/30 shrink-0" />
+                }
+                name="Proof of Delivery"
+                detail="Not uploaded yet"
+              />
+            )}
+
+            {/* Other receipts */}
+            {(load.receipts || [])
+              .filter(
+                (r) =>
+                  r.receipt_type !== "pod" &&
+                  !r.file_name?.toLowerCase().includes("pod")
+              )
+              .map((r) => (
+                <FileRow
+                  key={r.id}
+                  icon={
+                    <FileText className="h-8 w-8 text-gray-400 shrink-0" />
+                  }
+                  name={r.receipt_type ? r.receipt_type.replace("_", " ") : "Receipt"}
+                  detail={`${r.file_name || "File"}${r.amount ? ` · $${r.amount}` : ""} · ${fmtDate(r.created_at)}`}
+                  actionLabel="View"
+                  onAction={
+                    r.file_url
+                      ? () => window.open(r.file_url!, "_blank")
+                      : undefined
+                  }
+                />
+              ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Cancel action */}
+      {load.status !== "cancelled" && load.status !== "delivered" && (
+        <div className="flex justify-end">
+          <Button variant="destructive" size="sm" onClick={onCancel}>
+            <XCircle className="mr-2 h-4 w-4" />
+            Cancel Load
+          </Button>
+        </div>
+      )}
+
+      {load.cancel_reason && (
+        <Card className="border-destructive/30">
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium text-sm text-destructive">
+                  Cancellation Reason
+                </p>
+                <p className="text-sm mt-1">{load.cancel_reason}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Payment Status Dropdown (editable)
-// ---------------------------------------------------------------------------
-function PaymentStatusDropdown({
-  load,
-  onUpdate,
-}: {
-  load: LoadRow;
-  onUpdate: () => void;
-}) {
-  const supabase = useMemo(() => createClient(), []);
-  const [updating, setUpdating] = useState(false);
-  const pCfg = PAYMENT_CONFIG[load.payment_status];
+// ---- Shared small components -----------------------------------------------
 
-  const handleChange = async (newStatus: "unpaid" | "invoiced" | "paid") => {
-    setUpdating(true);
-    const { error } = await supabase
-      .from("loads")
-      .update({ payment_status: newStatus })
-      .eq("id", load.id);
-
-    if (error) {
-      toast.error(`Failed to update payment status: ${error.message}`);
-    } else {
-      toast.success("Payment status updated");
-      onUpdate();
-    }
-    setUpdating(false);
-  };
-
-  return (
-    <Select
-      value={load.payment_status}
-      onValueChange={handleChange}
-      disabled={updating}
-    >
-      <SelectTrigger className="w-[120px] h-7">
-        <Badge variant={pCfg?.variant} className="w-full justify-center">
-          {pCfg?.label}
-        </Badge>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="unpaid">Unpaid</SelectItem>
-        <SelectItem value="invoiced">Invoiced</SelectItem>
-        <SelectItem value="paid">Paid</SelectItem>
-      </SelectContent>
-    </Select>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Small detail item helper
-// ---------------------------------------------------------------------------
-function DetailItem({
+function FileRow({
   icon,
-  label,
-  value,
+  name,
+  detail,
+  actionLabel,
+  onAction,
 }: {
   icon: React.ReactNode;
-  label: string;
-  value: React.ReactNode;
+  name: string;
+  detail: string;
+  actionLabel?: string;
+  onAction?: () => void;
 }) {
   return (
-    <div className="flex items-start gap-2">
-      <div className="mt-0.5 text-muted-foreground">{icon}</div>
-      <div>
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <div className="text-sm font-medium">{value}</div>
+    <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
+      <div className="flex items-center gap-3 min-w-0">
+        {icon}
+        <div className="min-w-0">
+          <p className="font-medium text-sm">{name}</p>
+          <p className="text-xs text-muted-foreground truncate">{detail}</p>
+        </div>
       </div>
+      {onAction && actionLabel && (
+        <Button size="sm" variant="outline" onClick={onAction} className="shrink-0 ml-3">
+          <ExternalLink className="mr-1.5 h-3 w-3" />
+          {actionLabel}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function DetailItem({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <p className="text-muted-foreground text-xs">{label}</p>
+      <p className="font-medium">{children}</p>
+    </div>
+  );
+}
+
+function EmptyState({
+  icon,
+  title,
+  subtitle,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="text-center py-20 text-muted-foreground">
+      <div className="mx-auto mb-4 opacity-40">{icon}</div>
+      <p className="text-lg font-medium">{title}</p>
+      <p className="text-sm mt-1">{subtitle}</p>
     </div>
   );
 }
