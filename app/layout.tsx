@@ -20,6 +20,11 @@ export const metadata: Metadata = {
 
   description: "Trucking Management System by NFG",
 
+  icons: {
+    icon: "/logo.png",
+    apple: "/logo.png",
+  },
+
 };
 
 

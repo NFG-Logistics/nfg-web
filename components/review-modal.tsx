@@ -172,8 +172,7 @@ export function ReviewModal({ load, open, onClose, onDone }: ReviewModalProps) {
           }).then(() => {});
         }
       } else if (action === "retake") {
-        // Prefer edge function, but keep a web fallback so the button works
-        // even before function deployment.
+        // Prefer edge function; fall back to direct DB update if invoke fails.
         const { data, error } = await supabase.functions.invoke("request-retake", {
           body: {
             load_id: load.id,
@@ -181,8 +180,13 @@ export function ReviewModal({ load, open, onClose, onDone }: ReviewModalProps) {
           },
         });
 
-        if (error || data?.error) {
-          let appliedRetakeStatus = true;
+        const retakePayload = data as { success?: boolean; error?: string } | null | undefined;
+        const invokeFailed =
+          !!error ||
+          !!retakePayload?.error ||
+          retakePayload?.success === false;
+
+        if (invokeFailed) {
           const { error: updateErr } = await supabase
             .from("loads")
             .update({
@@ -194,38 +198,37 @@ export function ReviewModal({ load, open, onClose, onDone }: ReviewModalProps) {
             .eq("id", load.id);
 
           if (updateErr) {
-            // If enum/migration isn't present yet, keep old status and still send feedback.
             if (updateErr.message.includes("invalid input value for enum")) {
-              appliedRetakeStatus = false;
-              const { error: legacyErr } = await supabase
-                .from("loads")
-                .update({
-                  review_feedback: feedback.trim(),
-                  reviewed_by: authUser.id,
-                  reviewed_at: new Date().toISOString(),
-                })
-                .eq("id", load.id);
-              if (legacyErr) throw new Error(legacyErr.message);
-            } else {
-              throw new Error(updateErr.message);
+              throw new Error(
+                'Cannot request POD retake: the database is missing the "retake_requested" load status. Apply migration 2026_retake_requested_flow.sql on Supabase, then try again.'
+              );
             }
+            throw new Error(updateErr.message);
           }
 
           await supabase.from("status_updates").insert({
             load_id: load.id,
             previous_status: "empty",
-            new_status: appliedRetakeStatus ? "retake_requested" : "empty",
+            new_status: "retake_requested",
             changed_by: authUser.id,
             notes: feedback.trim(),
           });
 
           if (load.driver_id) {
+            const fb = feedback.trim();
             await supabase.from("notifications").insert({
               user_id: load.driver_id,
               title: "Retake POD Required",
-              body: "Please re-upload proof of delivery",
+              body:
+                fb.length > 0
+                  ? `Dispatch needs a new POD for load ${load.reference_number}. Reason: ${fb}`
+                  : `Please re-upload proof of delivery for load ${load.reference_number}.`,
               type: "pod_retake",
-              data: { load_id: load.id, reference_number: load.reference_number },
+              data: {
+                load_id: load.id,
+                reference_number: load.reference_number,
+                feedback: fb || null,
+              },
             });
           }
         }
@@ -583,7 +586,7 @@ export function ReviewModal({ load, open, onClose, onDone }: ReviewModalProps) {
                     {action === "retake" && (
                       <>
                         <p className="text-sm text-muted-foreground mb-2">
-                          Send feedback to the driver. The load stays in <strong>empty</strong> status for a new POD upload.
+                          Send feedback to the driver. The load moves to <strong>Retake Requested</strong> until they upload a new POD.
                         </p>
                         <Textarea
                           placeholder="Feedback message for the driver (required)..."

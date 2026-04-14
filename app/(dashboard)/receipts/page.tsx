@@ -89,6 +89,7 @@ export default function ReceiptsPage() {
             uploaded_by_user:uploaded_by(full_name),
             truck:truck_id(truck_number)`
         )
+        .in("receipt_type", ["fuel", "road_service"])
         .order("created_at", { ascending: false });
 
       if (error) {
