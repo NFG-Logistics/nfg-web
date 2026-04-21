@@ -16,9 +16,9 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
 
-  title: "NFG Logistics — Dashboard",
+  title: "NFG Logistics | Admin Dashboard",
 
-  description: "Trucking Management System by NFG",
+  description: "Enterprise Logistics & Fleet Management System by NFG Logistics. Streamline your dispatching and load tracking.",
 
   icons: {
     icon: "/logo.png",
