@@ -213,3 +213,27 @@ export interface LoadWithDetails extends Load {
   receipts?: Receipt[];
   status_updates?: StatusUpdate[];
 }
+
+// =============================================================================
+// SCHEDULE ENTRIES (manual entries on the Driver's Schedule page)
+// =============================================================================
+
+export interface ScheduleEntry {
+  id: string;
+  company_id: string;
+  pickup_date: string;
+  delivery_date: string;
+  company_name: string;
+  load_number: string;
+  pickup_city: string;
+  pickup_state: string;
+  delivery_city: string;
+  delivery_state: string;
+  driver_id?: string | null;
+  driver_name: string;
+  rate: number;
+  notes?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}

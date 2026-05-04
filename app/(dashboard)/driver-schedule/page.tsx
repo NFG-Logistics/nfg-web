@@ -26,9 +26,13 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { STATUS_CONFIG } from "@/lib/constants";
@@ -50,6 +54,9 @@ import {
   ShieldCheck,
   MessageSquare,
   AlertTriangle,
+  Plus,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -63,7 +70,15 @@ import {
   parseISO,
   eachDayOfInterval,
 } from "date-fns";
-import type { Load, LoadStatus, Stop, Receipt, StatusUpdate } from "@/types";
+import type {
+  Load,
+  LoadStatus,
+  Stop,
+  Receipt,
+  StatusUpdate,
+  ScheduleEntry,
+  User,
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +91,22 @@ interface LoadRow extends Load {
   status_updates: StatusUpdate[];
   reviewer: { full_name: string } | null;
 }
+
+// Unified row used by the schedule table. Either a dispatched load or a
+// manually-added entry; both are normalized to the same display shape.
+type ScheduleRowVM =
+  | {
+      kind: "load";
+      id: string;
+      pickupDateISO: string | null;
+      load: LoadRow;
+    }
+  | {
+      kind: "manual";
+      id: string;
+      pickupDateISO: string | null;
+      entry: ScheduleEntry;
+    };
 
 // ---------------------------------------------------------------------------
 // Week helpers — weeks always start Monday
@@ -158,29 +189,59 @@ function fmtDateTime(d: string | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// Group loads by pickup day within the selected week
+// Build unified schedule rows from loads + manual entries
 // ---------------------------------------------------------------------------
-function groupLoadsByPickupDay(
+function buildScheduleRows(
   loads: LoadRow[],
+  manualEntries: ScheduleEntry[]
+): ScheduleRowVM[] {
+  const rows: ScheduleRowVM[] = [];
+
+  for (const load of loads) {
+    const pickup = getPickupStop(load.stops ?? []);
+    rows.push({
+      kind: "load",
+      id: `load:${load.id}`,
+      pickupDateISO: pickup?.appointment_date ?? null,
+      load,
+    });
+  }
+
+  for (const entry of manualEntries) {
+    rows.push({
+      kind: "manual",
+      id: `manual:${entry.id}`,
+      pickupDateISO: entry.pickup_date,
+      entry,
+    });
+  }
+
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Group rows by pickup day within the selected week
+// ---------------------------------------------------------------------------
+function groupRowsByPickupDay(
+  rows: ScheduleRowVM[],
   weekStart: Date
-): { date: Date; dateLabel: string; loads: LoadRow[] }[] {
+): { date: Date; dateLabel: string; rows: ScheduleRowVM[] }[] {
   const weekEnd = getWeekEnd(weekStart);
   const days = eachDayOfInterval({ start: weekStart, end: weekEnd });
 
-  const groups: Map<string, LoadRow[]> = new Map();
+  const groups: Map<string, ScheduleRowVM[]> = new Map();
   for (const day of days) {
     groups.set(format(day, "yyyy-MM-dd"), []);
   }
 
-  for (const load of loads) {
-    const pickup = getPickupStop(load.stops ?? []);
-    if (!pickup?.appointment_date) continue;
-    const pickupDate = parseISO(pickup.appointment_date);
+  for (const row of rows) {
+    if (!row.pickupDateISO) continue;
+    const pickupDate = parseISO(row.pickupDateISO);
     if (!isWithinInterval(pickupDate, { start: weekStart, end: weekEnd }))
       continue;
     const key = format(pickupDate, "yyyy-MM-dd");
     const bucket = groups.get(key);
-    if (bucket) bucket.push(load);
+    if (bucket) bucket.push(row);
   }
 
   return days
@@ -189,10 +250,10 @@ function groupLoadsByPickupDay(
       return {
         date: day,
         dateLabel: format(day, "EEEE, MMMM d, yyyy"),
-        loads: groups.get(key) ?? [],
+        rows: groups.get(key) ?? [],
       };
     })
-    .filter((g) => g.loads.length > 0);
+    .filter((g) => g.rows.length > 0);
 }
 
 // ============================================================================
@@ -203,11 +264,21 @@ export default function DriverSchedulePage() {
   const { user } = useUser();
 
   const [allLoads, setAllLoads] = useState<LoadRow[]>([]);
+  const [manualEntries, setManualEntries] = useState<ScheduleEntry[]>([]);
+  const [drivers, setDrivers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedWeekStart, setSelectedWeekStart] = useState<Date>(
     getWeekStart(new Date())
   );
   const [detailLoad, setDetailLoad] = useState<LoadRow | null>(null);
+  const [entryDialogOpen, setEntryDialogOpen] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<ScheduleEntry | null>(null);
+  const [deletingEntry, setDeletingEntry] = useState<ScheduleEntry | null>(
+    null
+  );
+
+  const canManage =
+    user?.role === "admin" || user?.role === "dispatcher";
 
   // ── Fetch all loads with stops ────────────────────────────────────────
   const fetchLoads = useCallback(async () => {
@@ -259,9 +330,38 @@ export default function DriverSchedulePage() {
     }
   }, [supabase]);
 
+  // ── Fetch manual schedule entries ─────────────────────────────────────
+  const fetchManualEntries = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("schedule_entries")
+      .select("*")
+      .order("pickup_date", { ascending: false });
+    if (error) {
+      console.error("Schedule entries fetch error:", error);
+      return;
+    }
+    setManualEntries((data as ScheduleEntry[]) ?? []);
+  }, [supabase]);
+
+  // ── Fetch drivers (for manual entry driver dropdown) ──────────────────
+  const fetchDrivers = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("role", "driver")
+      .order("full_name");
+    if (error) {
+      console.error("Drivers fetch error:", error);
+      return;
+    }
+    setDrivers((data as User[]) ?? []);
+  }, [supabase]);
+
   useEffect(() => {
     fetchLoads();
-  }, [fetchLoads]);
+    fetchManualEntries();
+    fetchDrivers();
+  }, [fetchLoads, fetchManualEntries, fetchDrivers]);
 
   // ── Real-time subscription ────────────────────────────────────────────
   useEffect(() => {
@@ -282,13 +382,24 @@ export default function DriverSchedulePage() {
         { event: "*", schema: "public", table: "status_updates" },
         () => fetchLoads()
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "schedule_entries" },
+        () => fetchManualEntries()
+      )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [supabase, fetchLoads]);
+  }, [supabase, fetchLoads, fetchManualEntries]);
 
-  // ── Compute available weeks from all loads' pickup dates ──────────────
+  // ── Build unified schedule rows (loads + manual entries) ──────────────
+  const allRows = useMemo(
+    () => buildScheduleRows(allLoads, manualEntries),
+    [allLoads, manualEntries]
+  );
+
+  // ── Compute available weeks from rows' pickup dates ───────────────────
   const availableWeeks = useMemo(() => {
     const weekSet = new Map<string, Date>();
 
@@ -297,10 +408,9 @@ export default function DriverSchedulePage() {
     const currentWs = getWeekStart(now);
     weekSet.set(weekKey(now), currentWs);
 
-    for (const load of allLoads) {
-      const pickup = getPickupStop(load.stops ?? []);
-      if (!pickup?.appointment_date) continue;
-      const pickupDate = parseISO(pickup.appointment_date);
+    for (const row of allRows) {
+      if (!row.pickupDateISO) continue;
+      const pickupDate = parseISO(row.pickupDateISO);
       const ws = getWeekStart(pickupDate);
       const k = weekKey(pickupDate);
       if (!weekSet.has(k)) weekSet.set(k, ws);
@@ -309,16 +419,16 @@ export default function DriverSchedulePage() {
     return Array.from(weekSet.values()).sort(
       (a, b) => b.getTime() - a.getTime()
     );
-  }, [allLoads]);
+  }, [allRows]);
 
-  // ── Loads grouped by day for the selected week ────────────────────────
+  // ── Rows grouped by day for the selected week ─────────────────────────
   const dayGroups = useMemo(
-    () => groupLoadsByPickupDay(allLoads, selectedWeekStart),
-    [allLoads, selectedWeekStart]
+    () => groupRowsByPickupDay(allRows, selectedWeekStart),
+    [allRows, selectedWeekStart]
   );
 
   const totalLoadsThisWeek = useMemo(
-    () => dayGroups.reduce((sum, g) => sum + g.loads.length, 0),
+    () => dayGroups.reduce((sum, g) => sum + g.rows.length, 0),
     [dayGroups]
   );
 
@@ -365,12 +475,23 @@ export default function DriverSchedulePage() {
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <PageHeader
         title="Driver's Schedule"
-        description="Weekly dispatch schedule — automatically generated from dispatched loads"
+        description="Weekly dispatch schedule — auto-generated from dispatched loads, with optional manual entries"
       >
         <div className="flex items-center gap-2">
           {!isCurrentWeek && (
             <Button variant="outline" size="sm" onClick={goToCurrentWeek}>
               Today
+            </Button>
+          )}
+          {canManage && (
+            <Button
+              onClick={() => {
+                setEditingEntry(null);
+                setEntryDialogOpen(true);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add to Driver&apos;s Schedule
             </Button>
           )}
         </div>
@@ -441,7 +562,9 @@ export default function DriverSchedulePage() {
               No loads scheduled for {formatWeekLabel(selectedWeekStart)}
             </p>
             <p className="text-xs mt-1">
-              Loads appear here automatically once dispatched with a pickup date in this week.
+              Loads appear here automatically once dispatched, or use{" "}
+              <span className="font-medium">Add to Driver&apos;s Schedule</span>{" "}
+              to add a manual entry.
             </p>
           </CardContent>
         </Card>
@@ -454,7 +577,7 @@ export default function DriverSchedulePage() {
                 <div className="h-2.5 w-2.5 rounded-full bg-primary" />
                 <h3 className="text-sm font-semibold">{group.dateLabel}</h3>
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                  {group.loads.length} load{group.loads.length !== 1 ? "s" : ""}
+                  {group.rows.length} load{group.rows.length !== 1 ? "s" : ""}
                 </Badge>
               </div>
 
@@ -477,50 +600,122 @@ export default function DriverSchedulePage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {group.loads.map((load) => {
-                        const sCfg = STATUS_CONFIG[load.status as LoadStatus];
-                        const pickup = getPickupStop(load.stops ?? []);
-                        const delivery = getDeliveryStop(load.stops ?? []);
+                      {group.rows.map((row) => {
+                        if (row.kind === "load") {
+                          const load = row.load;
+                          const sCfg = STATUS_CONFIG[load.status as LoadStatus];
+                          const pickup = getPickupStop(load.stops ?? []);
+                          const delivery = getDeliveryStop(load.stops ?? []);
 
+                          return (
+                            <TableRow key={row.id}>
+                              <TableCell>
+                                <Badge variant={sCfg?.variant}>
+                                  {sCfg?.label}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-sm whitespace-nowrap">
+                                {fmtDateShort(pickup?.appointment_date)}
+                              </TableCell>
+                              <TableCell className="text-sm whitespace-nowrap">
+                                {fmtDateShort(delivery?.appointment_date)}
+                              </TableCell>
+                              <TableCell className="font-medium">
+                                {load.client_name || "—"}
+                              </TableCell>
+                              <TableCell className="font-medium">
+                                {load.reference_number}
+                              </TableCell>
+                              <TableCell className="text-sm whitespace-nowrap">
+                                {fmtCityState(pickup)}
+                              </TableCell>
+                              <TableCell className="text-sm whitespace-nowrap">
+                                {fmtCityState(delivery)}
+                              </TableCell>
+                              <TableCell>
+                                {load.driver?.full_name || "—"}
+                              </TableCell>
+                              <TableCell className="text-right font-medium">
+                                ${Number(load.rate).toLocaleString()}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => openDetail(load)}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        }
+
+                        // Manual entry row
+                        const entry = row.entry;
                         return (
-                          <TableRow key={load.id}>
+                          <TableRow key={row.id} className="bg-amber-50/30 dark:bg-amber-950/10">
                             <TableCell>
-                              <Badge variant={sCfg?.variant}>
-                                {sCfg?.label}
+                              <Badge
+                                variant="outline"
+                                className="gap-1 border-amber-400 text-amber-700 dark:border-amber-600 dark:text-amber-300"
+                              >
+                                <Pencil className="h-3 w-3" />
+                                Manual
                               </Badge>
                             </TableCell>
                             <TableCell className="text-sm whitespace-nowrap">
-                              {fmtDateShort(pickup?.appointment_date)}
+                              {fmtDateShort(entry.pickup_date)}
                             </TableCell>
                             <TableCell className="text-sm whitespace-nowrap">
-                              {fmtDateShort(delivery?.appointment_date)}
+                              {fmtDateShort(entry.delivery_date)}
                             </TableCell>
                             <TableCell className="font-medium">
-                              {load.client_name || "—"}
+                              {entry.company_name || "—"}
                             </TableCell>
                             <TableCell className="font-medium">
-                              {load.reference_number}
+                              {entry.load_number}
                             </TableCell>
                             <TableCell className="text-sm whitespace-nowrap">
-                              {fmtCityState(pickup)}
+                              {[entry.pickup_city, entry.pickup_state]
+                                .filter(Boolean)
+                                .join(", ") || "—"}
                             </TableCell>
                             <TableCell className="text-sm whitespace-nowrap">
-                              {fmtCityState(delivery)}
+                              {[entry.delivery_city, entry.delivery_state]
+                                .filter(Boolean)
+                                .join(", ") || "—"}
                             </TableCell>
-                            <TableCell>
-                              {load.driver?.full_name || "—"}
-                            </TableCell>
+                            <TableCell>{entry.driver_name || "—"}</TableCell>
                             <TableCell className="text-right font-medium">
-                              ${Number(load.rate).toLocaleString()}
+                              ${Number(entry.rate).toLocaleString()}
                             </TableCell>
                             <TableCell className="text-right">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => openDetail(load)}
-                              >
-                                <Eye className="h-4 w-4" />
-                              </Button>
+                              {canManage ? (
+                                <div className="flex items-center justify-end gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => {
+                                      setEditingEntry(entry);
+                                      setEntryDialogOpen(true);
+                                    }}
+                                    title="Edit entry"
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => setDeletingEntry(entry)}
+                                    title="Delete entry"
+                                  >
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground text-sm">—</span>
+                              )}
                             </TableCell>
                           </TableRow>
                         );
@@ -539,6 +734,29 @@ export default function DriverSchedulePage() {
         load={detailLoad}
         open={!!detailLoad}
         onClose={() => setDetailLoad(null)}
+      />
+
+      {/* ── Manual Entry Create/Edit Dialog ─────────────────────────────── */}
+      <ScheduleEntryDialog
+        open={entryDialogOpen}
+        onOpenChange={(open) => {
+          setEntryDialogOpen(open);
+          if (!open) setEditingEntry(null);
+        }}
+        editing={editingEntry}
+        drivers={drivers}
+        companyId={user?.company_id}
+        currentUserId={user?.id}
+        onSaved={() => {
+          fetchManualEntries();
+        }}
+      />
+
+      {/* ── Manual Entry Delete Confirmation ────────────────────────────── */}
+      <DeleteEntryDialog
+        entry={deletingEntry}
+        onClose={() => setDeletingEntry(null)}
+        onDeleted={() => fetchManualEntries()}
       />
     </div>
   );
@@ -900,5 +1118,416 @@ function DetailItem({
         <div className="text-sm font-medium">{value}</div>
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// SCHEDULE ENTRY DIALOG (Create / Edit manual schedule entry)
+// ============================================================================
+const DRIVER_CUSTOM = "__custom__";
+
+function ScheduleEntryDialog({
+  open,
+  onOpenChange,
+  editing,
+  drivers,
+  companyId,
+  currentUserId,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  editing: ScheduleEntry | null;
+  drivers: User[];
+  companyId?: string;
+  currentUserId?: string;
+  onSaved: () => void;
+}) {
+  const supabase = useMemo(() => createClient(), []);
+  const isEdit = !!editing;
+
+  // Form state
+  const [pickupDate, setPickupDate] = useState("");
+  const [deliveryDate, setDeliveryDate] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [loadNumber, setLoadNumber] = useState("");
+  const [pickupCity, setPickupCity] = useState("");
+  const [pickupState, setPickupState] = useState("");
+  const [deliveryCity, setDeliveryCity] = useState("");
+  const [deliveryState, setDeliveryState] = useState("");
+  const [driverSelectValue, setDriverSelectValue] = useState<string>(DRIVER_CUSTOM);
+  const [customDriverName, setCustomDriverName] = useState("");
+  const [rate, setRate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  // Reset / hydrate when dialog opens
+  useEffect(() => {
+    if (!open) return;
+
+    if (editing) {
+      setPickupDate(editing.pickup_date ?? "");
+      setDeliveryDate(editing.delivery_date ?? "");
+      setCompanyName(editing.company_name ?? "");
+      setLoadNumber(editing.load_number ?? "");
+      setPickupCity(editing.pickup_city ?? "");
+      setPickupState(editing.pickup_state ?? "");
+      setDeliveryCity(editing.delivery_city ?? "");
+      setDeliveryState(editing.delivery_state ?? "");
+
+      const matched = editing.driver_id
+        ? drivers.find((d) => d.id === editing.driver_id)
+        : null;
+      if (matched) {
+        setDriverSelectValue(matched.id);
+        setCustomDriverName("");
+      } else {
+        setDriverSelectValue(DRIVER_CUSTOM);
+        setCustomDriverName(editing.driver_name ?? "");
+      }
+
+      setRate(editing.rate != null ? String(editing.rate) : "");
+      setNotes(editing.notes ?? "");
+    } else {
+      setPickupDate("");
+      setDeliveryDate("");
+      setCompanyName("");
+      setLoadNumber("");
+      setPickupCity("");
+      setPickupState("");
+      setDeliveryCity("");
+      setDeliveryState("");
+      setDriverSelectValue(DRIVER_CUSTOM);
+      setCustomDriverName("");
+      setRate("");
+      setNotes("");
+    }
+  }, [open, editing, drivers]);
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (!companyId) {
+      toast.error("Missing company context. Please refresh and try again.");
+      return;
+    }
+
+    // Resolve driver
+    const isCustomDriver = driverSelectValue === DRIVER_CUSTOM;
+    const selectedDriver = !isCustomDriver
+      ? drivers.find((d) => d.id === driverSelectValue) ?? null
+      : null;
+    const driverName = isCustomDriver
+      ? customDriverName.trim()
+      : selectedDriver?.full_name ?? "";
+
+    if (!driverName) {
+      toast.error("Please select a driver or enter a name");
+      return;
+    }
+
+    if (deliveryDate < pickupDate) {
+      toast.error("Delivery date cannot be earlier than pickup date");
+      return;
+    }
+
+    const rateNum = Number(rate);
+    if (!Number.isFinite(rateNum) || rateNum < 0) {
+      toast.error("Please enter a valid, non-negative rate");
+      return;
+    }
+
+    const payload = {
+      company_id: companyId,
+      pickup_date: pickupDate,
+      delivery_date: deliveryDate,
+      company_name: companyName.trim(),
+      load_number: loadNumber.trim(),
+      pickup_city: pickupCity.trim(),
+      pickup_state: pickupState.trim(),
+      delivery_city: deliveryCity.trim(),
+      delivery_state: deliveryState.trim(),
+      driver_id: selectedDriver?.id ?? null,
+      driver_name: driverName,
+      rate: rateNum,
+      notes: notes.trim() || null,
+    };
+
+    setSubmitting(true);
+    try {
+      if (isEdit && editing) {
+        const { error } = await supabase
+          .from("schedule_entries")
+          .update(payload)
+          .eq("id", editing.id);
+        if (error) throw error;
+        toast.success("Schedule entry updated");
+      } else {
+        const { error } = await supabase
+          .from("schedule_entries")
+          .insert({ ...payload, created_by: currentUserId ?? null });
+        if (error) throw error;
+        toast.success("Schedule entry added");
+      }
+
+      onSaved();
+      onOpenChange(false);
+    } catch (err: any) {
+      console.error("Save schedule entry failed:", err);
+      toast.error(err?.message || "Failed to save schedule entry");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>
+            {isEdit ? "Edit Schedule Entry" : "Add to Driver's Schedule"}
+          </DialogTitle>
+          <DialogDescription>
+            {isEdit
+              ? "Update the manual schedule entry."
+              : "Add a manual entry to the Driver's Schedule without dispatching a load."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="pickup_date">Pickup Date *</Label>
+              <Input
+                id="pickup_date"
+                type="date"
+                value={pickupDate}
+                onChange={(e) => setPickupDate(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="delivery_date">Delivery Date *</Label>
+              <Input
+                id="delivery_date"
+                type="date"
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="space-y-2 col-span-2">
+              <Label htmlFor="company_name">Company Name *</Label>
+              <Input
+                id="company_name"
+                placeholder="ACME Logistics"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="space-y-2 col-span-2">
+              <Label htmlFor="load_number">Load Number *</Label>
+              <Input
+                id="load_number"
+                placeholder="e.g. NFG-12345"
+                value={loadNumber}
+                onChange={(e) => setLoadNumber(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="pickup_city">Pickup City *</Label>
+              <Input
+                id="pickup_city"
+                placeholder="Dallas"
+                value={pickupCity}
+                onChange={(e) => setPickupCity(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="pickup_state">Pickup State *</Label>
+              <Input
+                id="pickup_state"
+                placeholder="TX"
+                value={pickupState}
+                onChange={(e) => setPickupState(e.target.value.toUpperCase())}
+                maxLength={2}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="delivery_city">Delivery City *</Label>
+              <Input
+                id="delivery_city"
+                placeholder="Atlanta"
+                value={deliveryCity}
+                onChange={(e) => setDeliveryCity(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="delivery_state">Delivery State *</Label>
+              <Input
+                id="delivery_state"
+                placeholder="GA"
+                value={deliveryState}
+                onChange={(e) =>
+                  setDeliveryState(e.target.value.toUpperCase())
+                }
+                maxLength={2}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Driver *</Label>
+              <Select
+                value={driverSelectValue}
+                onValueChange={setDriverSelectValue}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a driver" />
+                </SelectTrigger>
+                <SelectContent>
+                  {drivers.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.full_name}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value={DRIVER_CUSTOM}>
+                    Other (type a name)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              {driverSelectValue === DRIVER_CUSTOM && (
+                <Input
+                  placeholder="Driver name"
+                  value={customDriverName}
+                  onChange={(e) => setCustomDriverName(e.target.value)}
+                  required
+                />
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="rate">Rate ($) *</Label>
+              <Input
+                id="rate"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+                value={rate}
+                onChange={(e) => setRate(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="space-y-2 col-span-2">
+              <Label htmlFor="notes">Notes (optional)</Label>
+              <Textarea
+                id="notes"
+                rows={2}
+                placeholder="Any additional details"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isEdit ? "Save Changes" : "Add Entry"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============================================================================
+// DELETE CONFIRMATION DIALOG (Manual schedule entry)
+// ============================================================================
+function DeleteEntryDialog({
+  entry,
+  onClose,
+  onDeleted,
+}: {
+  entry: ScheduleEntry | null;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const supabase = useMemo(() => createClient(), []);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!entry) return;
+    setSubmitting(true);
+    try {
+      const { error } = await supabase
+        .from("schedule_entries")
+        .delete()
+        .eq("id", entry.id);
+      if (error) throw error;
+      toast.success("Schedule entry removed");
+      onDeleted();
+      onClose();
+    } catch (err: any) {
+      console.error("Delete schedule entry failed:", err);
+      toast.error(err?.message || "Failed to delete schedule entry");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={!!entry} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete schedule entry?</DialogTitle>
+          <DialogDescription>
+            This will permanently remove the manual entry
+            {entry?.load_number ? ` (${entry.load_number})` : ""} from the
+            Driver&apos;s Schedule. This cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={handleDelete}
+            disabled={submitting}
+          >
+            {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Delete
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
