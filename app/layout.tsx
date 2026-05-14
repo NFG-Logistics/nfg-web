@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   description: "Enterprise Logistics & Fleet Management System by NFG Logistics. Streamline your dispatching and load tracking.",
 
   icons: {
-    icon: "/logo.png",
+    icon: "/favicon.png",
     apple: "/logo.png",
   },
 
