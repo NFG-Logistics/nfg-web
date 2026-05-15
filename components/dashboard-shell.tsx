@@ -7,6 +7,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Menu, X } from "lucide-react";
 import { UserProvider } from "@/contexts/user-context";
+import { GlobalStatusNotifier } from "@/components/global-status-notifier";
+import { NotificationToggle } from "@/components/notification-toggle";
 
 interface DashboardShellProps {
   initialUser?: { id: string; email?: string; user_metadata?: Record<string, unknown> } | null;
@@ -18,6 +20,9 @@ export function DashboardShell({ initialUser, children }: DashboardShellProps) {
 
   return (
     <UserProvider initialUser={initialUser}>
+      {/* Dashboard-wide listener for driver status changes — fires toasts /
+          desktop notifications on every page (Status Updates, Reports, etc.). */}
+      <GlobalStatusNotifier />
       <div className="flex h-screen overflow-hidden">
         {/* Desktop sidebar */}
         <aside className="hidden lg:flex">
@@ -53,6 +58,7 @@ export function DashboardShell({ initialUser, children }: DashboardShellProps) {
             <div className="flex-1" />
 
             <div className="flex items-center gap-2">
+              <NotificationToggle />
               <ThemeToggle />
               <UserNav />
             </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useUser } from "@/hooks/use-user";
 import { PageHeader } from "@/components/page-header";
@@ -35,8 +35,6 @@ import type {
 } from "@/types";
 import {
   Activity,
-  Bell,
-  BellOff,
   Clock,
   Eye,
   RefreshCw,
@@ -116,86 +114,13 @@ export default function StatusUpdatesPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
   const [reviewLoad, setReviewLoad] = useState<LoadRow | null>(null);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [isLive, setIsLive] = useState(false);
 
   const isAdmin = user?.role === "admin";
-  const prevLoadsRef = useRef<Map<string, string>>(new Map());
-  const initialLoadDone = useRef(false);
 
-  // ── Browser notification permission ───────────────────────────────
-  useEffect(() => {
-    if (typeof window === "undefined" || !("Notification" in window)) return;
-    if (Notification.permission === "granted") {
-      setNotificationsEnabled(true);
-    }
-  }, []);
-
-  const requestNotifications = useCallback(async () => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      toast.error("Browser notifications are not supported");
-      return;
-    }
-    const perm = await Notification.requestPermission();
-    setNotificationsEnabled(perm === "granted");
-    if (perm === "granted") {
-      toast.success("Desktop notifications enabled");
-    } else {
-      toast.error("Notification permission denied");
-    }
-  }, []);
-
-  const sendBrowserNotification = useCallback(
-    (title: string, body: string) => {
-      if (typeof window === "undefined" || !("Notification" in window)) return;
-      if (Notification.permission !== "granted") return;
-      try {
-        new Notification(title, {
-          body,
-          icon: "/logo.png",
-        });
-      } catch {
-        // Silently fail
-      }
-    },
-    []
-  );
-
-  // ── Notify on detected changes ────────────────────────────────────
-  const notifyChanges = useCallback(
-    (newLoads: LoadRow[]) => {
-      if (!initialLoadDone.current) return;
-
-      const prev = prevLoadsRef.current;
-
-      for (const load of newLoads) {
-        const prevStatus = prev.get(load.id);
-        if (prevStatus && prevStatus !== load.status) {
-          const oldCfg = STATUS_CONFIG[prevStatus as LoadStatus];
-          const newCfg = STATUS_CONFIG[load.status as LoadStatus];
-          const driverName = load.driver?.full_name || "Driver";
-          const ref = load.reference_number || "Load";
-          const title = `${driverName} — ${ref}`;
-          const body = `${oldCfg?.label ?? prevStatus} → ${newCfg?.label ?? load.status}`;
-
-          toast.info(title, { description: body, duration: 8000 });
-          sendBrowserNotification(title, body);
-        }
-
-        if (!prev.has(load.id)) {
-          const driverName = load.driver?.full_name || "Driver";
-          const ref = load.reference_number || "Load";
-          const cfg = STATUS_CONFIG[load.status as LoadStatus];
-          const title = `New Load — ${ref}`;
-          const body = `${driverName} · ${cfg?.label ?? load.status}`;
-
-          toast.info(title, { description: body, duration: 8000 });
-          sendBrowserNotification(title, body);
-        }
-      }
-    },
-    [sendBrowserNotification]
-  );
+  // Toasts and desktop notifications for driver status changes are fired by
+  // the dashboard-wide `GlobalStatusNotifier` (mounted in `DashboardShell`),
+  // so this page only needs to keep its own data in sync.
 
   // ── Fetch active loads ──────────────────────────────────────────────
   const fetchLoads = useCallback(async (isInitial = false) => {
@@ -232,12 +157,9 @@ export default function StatusUpdatesPage() {
           receipts: [],
           status_updates: [],
         }));
-        notifyChanges(mapped);
         setLoads(mapped);
       } else {
-        const newLoads = (data as LoadRow[]) ?? [];
-        notifyChanges(newLoads);
-        setLoads(newLoads);
+        setLoads((data as LoadRow[]) ?? []);
       }
     } catch (err) {
       console.error("Status updates fetch exception:", err);
@@ -245,19 +167,7 @@ export default function StatusUpdatesPage() {
     } finally {
       if (isInitial) setLoading(false);
     }
-  }, [supabase, notifyChanges]);
-
-  // ── Update prevLoadsRef whenever loads change ─────────────────────
-  useEffect(() => {
-    const map = new Map<string, string>();
-    for (const load of loads) {
-      map.set(load.id, load.status);
-    }
-    prevLoadsRef.current = map;
-    if (loads.length > 0 || !loading) {
-      initialLoadDone.current = true;
-    }
-  }, [loads, loading]);
+  }, [supabase]);
 
   // ── Initial fetch ─────────────────────────────────────────────────
   useEffect(() => {
@@ -359,26 +269,6 @@ export default function StatusUpdatesPage() {
             />
             {isLive ? "Live" : "Connecting..."}
           </div>
-
-          {/* Desktop notifications toggle */}
-          <Button
-            variant={notificationsEnabled ? "outline" : "default"}
-            size="sm"
-            onClick={requestNotifications}
-            className="gap-2"
-            title={
-              notificationsEnabled
-                ? "Desktop notifications enabled"
-                : "Enable desktop notifications"
-            }
-          >
-            {notificationsEnabled ? (
-              <Bell className="h-4 w-4" />
-            ) : (
-              <BellOff className="h-4 w-4" />
-            )}
-            {notificationsEnabled ? "Notifications On" : "Enable Notifications"}
-          </Button>
 
           <Button
             variant="outline"

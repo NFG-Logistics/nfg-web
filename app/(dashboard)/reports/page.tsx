@@ -291,47 +291,115 @@ export default function ReportsPage() {
   };
 
   const revenueData = useMemo(() => {
-    const periodMap: Record<string, { revenue: number; sortKey: number }> = {};
+    type Bucket = { period: string; revenue: number; sortKey: number };
 
+    // ── Helpers to derive a stable bucket key / label / sort key for any date ──
+    const bucketFor = (
+      d: Date
+    ): { key: string; label: string; sortKey: number } => {
+      switch (revenuePeriod) {
+        case "day":
+          return {
+            key: `${d.getFullYear()}-${(d.getMonth() + 1)
+              .toString()
+              .padStart(2, "0")}-${d.getDate().toString().padStart(2, "0")}`,
+            label: d.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            }),
+            sortKey: new Date(
+              d.getFullYear(),
+              d.getMonth(),
+              d.getDate()
+            ).getTime(),
+          };
+        case "week": {
+          const year = d.getFullYear();
+          const weekNum = Math.ceil(
+            (d.getTime() - new Date(year, 0, 1).getTime()) /
+              (7 * 24 * 60 * 60 * 1000)
+          );
+          const key = `${year}-W${weekNum.toString().padStart(2, "0")}`;
+          return { key, label: key, sortKey: year * 100 + weekNum };
+        }
+        case "year":
+          return {
+            key: d.getFullYear().toString(),
+            label: d.getFullYear().toString(),
+            sortKey: d.getFullYear(),
+          };
+        case "month":
+        default:
+          return {
+            key: `${d.getFullYear()}-${(d.getMonth() + 1)
+              .toString()
+              .padStart(2, "0")}`,
+            label: d.toLocaleDateString("en-US", {
+              month: "short",
+              year: "numeric",
+            }),
+            sortKey: d.getFullYear() * 100 + (d.getMonth() + 1),
+          };
+      }
+    };
+
+    // ── Seed a rolling window of N empty periods ending at "today" so the
+    // chart always has a consistent width/shape even with sparse data. ──────
+    const now = new Date();
+    const periodMap = new Map<string, Bucket>();
+
+    const seedCount =
+      revenuePeriod === "day"
+        ? 14
+        : revenuePeriod === "week"
+        ? 8
+        : revenuePeriod === "year"
+        ? 5
+        : 6; // month
+
+    for (let offset = seedCount - 1; offset >= 0; offset--) {
+      const d = new Date(now);
+      switch (revenuePeriod) {
+        case "day":
+          d.setDate(d.getDate() - offset);
+          break;
+        case "week":
+          d.setDate(d.getDate() - offset * 7);
+          break;
+        case "year":
+          d.setFullYear(d.getFullYear() - offset);
+          break;
+        case "month":
+        default:
+          d.setMonth(d.getMonth() - offset, 1);
+      }
+      const { key, label, sortKey } = bucketFor(d);
+      if (!periodMap.has(key)) {
+        periodMap.set(key, { period: label, revenue: 0, sortKey });
+      }
+    }
+
+    // ── Fold paid load revenue into the buckets (creating older buckets if
+    // a load falls outside the seeded window — they'll be sliced off below). ─
     paidLoads.forEach((l) => {
       if (!l.completed_at) return;
       const completed = new Date(l.completed_at);
-      let key: string;
-      let sortKey: number;
+      const { key, label, sortKey } = bucketFor(completed);
 
-      switch (revenuePeriod) {
-        case "day":
-          key = completed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-          sortKey = completed.getTime();
-          break;
-        case "week": {
-          const year = completed.getFullYear();
-          const weekNum = Math.ceil((completed.getTime() - new Date(year, 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000));
-          key = `${year}-W${weekNum.toString().padStart(2, "0")}`;
-          sortKey = year * 100 + weekNum;
-          break;
-        }
-        case "month":
-          key = completed.toLocaleDateString("en-US", { month: "short", year: "numeric" });
-          sortKey = completed.getFullYear() * 100 + (completed.getMonth() + 1);
-          break;
-        case "year":
-          key = completed.getFullYear().toString();
-          sortKey = completed.getFullYear();
-          break;
-        default:
-          key = completed.toLocaleDateString("en-US", { month: "short", year: "numeric" });
-          sortKey = completed.getFullYear() * 100 + (completed.getMonth() + 1);
+      const existing = periodMap.get(key);
+      if (existing) {
+        existing.revenue += l.rate || 0;
+      } else {
+        periodMap.set(key, {
+          period: label,
+          revenue: l.rate || 0,
+          sortKey,
+        });
       }
-
-      if (!periodMap[key]) {
-        periodMap[key] = { revenue: 0, sortKey };
-      }
-      periodMap[key].revenue += l.rate || 0;
     });
 
-    return Object.entries(periodMap)
-      .map(([period, data]) => ({ period, revenue: data.revenue, sortKey: data.sortKey }))
+    return Array.from(periodMap.values())
       .sort((a, b) => a.sortKey - b.sortKey)
       .slice(-12);
   }, [paidLoads, revenuePeriod]);
@@ -514,7 +582,10 @@ export default function ReportsPage() {
               ) : (
                 <div className="h-[350px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={revenueData}>
+                    <BarChart
+                      data={revenueData}
+                      barCategoryGap="25%"
+                    >
                       <CartesianGrid
                         strokeDasharray="3 3"
                         stroke="hsl(var(--border))"
@@ -548,6 +619,7 @@ export default function ReportsPage() {
                         dataKey="revenue"
                         fill="hsl(221.2, 83.2%, 53.3%)"
                         radius={[4, 4, 0, 0]}
+                        maxBarSize={56}
                       />
                     </BarChart>
                   </ResponsiveContainer>

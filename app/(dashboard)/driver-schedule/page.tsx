@@ -276,6 +276,7 @@ export default function DriverSchedulePage() {
   const [deletingEntry, setDeletingEntry] = useState<ScheduleEntry | null>(
     null
   );
+  const [editingLoad, setEditingLoad] = useState<LoadRow | null>(null);
 
   const canManage =
     user?.role === "admin" || user?.role === "dispatcher";
@@ -639,13 +640,26 @@ export default function DriverSchedulePage() {
                                 ${Number(load.rate).toLocaleString()}
                               </TableCell>
                               <TableCell className="text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => openDetail(load)}
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </Button>
+                                <div className="flex items-center justify-end gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => openDetail(load)}
+                                    title="View details"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                  {canManage && (
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => setEditingLoad(load)}
+                                      title="Edit schedule"
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </div>
                               </TableCell>
                             </TableRow>
                           );
@@ -757,6 +771,14 @@ export default function DriverSchedulePage() {
         entry={deletingEntry}
         onClose={() => setDeletingEntry(null)}
         onDeleted={() => fetchManualEntries()}
+      />
+
+      {/* ── Auto-generated Load Edit Dialog ─────────────────────────────── */}
+      <LoadScheduleEditDialog
+        load={editingLoad}
+        drivers={drivers}
+        onClose={() => setEditingLoad(null)}
+        onSaved={() => fetchLoads()}
       />
     </div>
   );
@@ -1454,6 +1476,333 @@ function ScheduleEntryDialog({
             <Button type="submit" disabled={submitting}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {isEdit ? "Save Changes" : "Add Entry"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============================================================================
+// LOAD SCHEDULE EDIT DIALOG (Edit values of an auto-generated load row)
+// ============================================================================
+// Lets admins/dispatchers update the same fields shown in the Driver's Schedule
+// table for auto-generated load rows. Writes flow through:
+//   • loads:  reference_number, client_name, rate, driver_id
+//   • stops:  appointment_date, city, state  (pickup stop + delivery stop)
+// These are the same fields the mobile app reads, so the assigned driver will
+// see the changes reflected in their load list / load detail screen.
+const UNASSIGNED_DRIVER = "__unassigned__";
+
+function LoadScheduleEditDialog({
+  load,
+  drivers,
+  onClose,
+  onSaved,
+}: {
+  load: LoadRow | null;
+  drivers: User[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const supabase = useMemo(() => createClient(), []);
+
+  const pickup = useMemo(
+    () => (load ? getPickupStop(load.stops ?? []) : null),
+    [load]
+  );
+  const delivery = useMemo(
+    () => (load ? getDeliveryStop(load.stops ?? []) : null),
+    [load]
+  );
+
+  const [pickupDate, setPickupDate] = useState("");
+  const [deliveryDate, setDeliveryDate] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [loadNumber, setLoadNumber] = useState("");
+  const [pickupCity, setPickupCity] = useState("");
+  const [pickupState, setPickupState] = useState("");
+  const [deliveryCity, setDeliveryCity] = useState("");
+  const [deliveryState, setDeliveryState] = useState("");
+  const [driverId, setDriverId] = useState<string>(UNASSIGNED_DRIVER);
+  const [rate, setRate] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  // Reset / hydrate when the dialog opens with a different load
+  useEffect(() => {
+    if (!load) return;
+
+    const pickupAppt = pickup?.appointment_date;
+    const deliveryAppt = delivery?.appointment_date;
+
+    setPickupDate(pickupAppt ? format(parseISO(pickupAppt), "yyyy-MM-dd") : "");
+    setDeliveryDate(
+      deliveryAppt ? format(parseISO(deliveryAppt), "yyyy-MM-dd") : ""
+    );
+    setCompanyName(load.client_name ?? "");
+    setLoadNumber(load.reference_number ?? "");
+    setPickupCity(pickup?.city ?? "");
+    setPickupState(pickup?.state ?? "");
+    setDeliveryCity(delivery?.city ?? "");
+    setDeliveryState(delivery?.state ?? "");
+    setDriverId(load.driver_id ?? UNASSIGNED_DRIVER);
+    setRate(load.rate != null ? String(load.rate) : "");
+  }, [load, pickup, delivery]);
+
+  // Merge a new YYYY-MM-DD into an existing ISO timestamp, preserving the
+  // original time-of-day. Falls back to noon local (avoids TZ off-by-one).
+  function mergeDateIntoIso(
+    newDateYMD: string,
+    originalIso: string | null | undefined
+  ): string | null {
+    if (!newDateYMD) return null;
+    const parts = newDateYMD.split("-").map(Number);
+    if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) return null;
+    const [y, m, d] = parts;
+    const merged = originalIso ? new Date(originalIso) : new Date();
+    merged.setFullYear(y, m - 1, d);
+    if (!originalIso) merged.setHours(12, 0, 0, 0);
+    return merged.toISOString();
+  }
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!load) return;
+
+    if (!loadNumber.trim()) {
+      toast.error("Load number is required");
+      return;
+    }
+    if (pickupDate && deliveryDate && deliveryDate < pickupDate) {
+      toast.error("Delivery date cannot be earlier than pickup date");
+      return;
+    }
+    const rateNum = Number(rate);
+    if (!Number.isFinite(rateNum) || rateNum < 0) {
+      toast.error("Please enter a valid, non-negative rate");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      // 1) Update the load itself
+      const { error: loadErr } = await supabase
+        .from("loads")
+        .update({
+          reference_number: loadNumber.trim(),
+          client_name: companyName.trim() || null,
+          rate: rateNum,
+          driver_id:
+            driverId && driverId !== UNASSIGNED_DRIVER ? driverId : null,
+        })
+        .eq("id", load.id);
+      if (loadErr) throw loadErr;
+
+      // 2) Update the pickup stop (if present on this load)
+      if (pickup) {
+        const pickupUpdate: Record<string, unknown> = {
+          city: pickupCity.trim(),
+          state: pickupState.trim().toUpperCase(),
+        };
+        const newPickupIso = mergeDateIntoIso(
+          pickupDate,
+          pickup.appointment_date
+        );
+        if (newPickupIso !== null) pickupUpdate.appointment_date = newPickupIso;
+        const { error: pErr } = await supabase
+          .from("stops")
+          .update(pickupUpdate)
+          .eq("id", pickup.id);
+        if (pErr) throw pErr;
+      }
+
+      // 3) Update the delivery stop (if present on this load)
+      if (delivery) {
+        const deliveryUpdate: Record<string, unknown> = {
+          city: deliveryCity.trim(),
+          state: deliveryState.trim().toUpperCase(),
+        };
+        const newDeliveryIso = mergeDateIntoIso(
+          deliveryDate,
+          delivery.appointment_date
+        );
+        if (newDeliveryIso !== null)
+          deliveryUpdate.appointment_date = newDeliveryIso;
+        const { error: dErr } = await supabase
+          .from("stops")
+          .update(deliveryUpdate)
+          .eq("id", delivery.id);
+        if (dErr) throw dErr;
+      }
+
+      toast.success("Load schedule updated. The driver will see this.");
+      onSaved();
+      onClose();
+    } catch (err: unknown) {
+      console.error("Update load schedule failed:", err);
+      const e = err as { code?: string; message?: string };
+      if (e?.code === "23505") {
+        toast.error("Another load in your company already uses that load number.");
+      } else {
+        toast.error(e?.message || "Failed to update load");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={!!load} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit Schedule Entry</DialogTitle>
+          <DialogDescription>
+            Update pickup/delivery details, rate, or assigned driver. Changes
+            are saved to the underlying load and are visible to the driver in
+            their mobile app.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit_load_pickup_date">Pickup Date</Label>
+              <Input
+                id="edit_load_pickup_date"
+                type="date"
+                value={pickupDate}
+                onChange={(e) => setPickupDate(e.target.value)}
+                disabled={!pickup}
+              />
+              {!pickup && (
+                <p className="text-[11px] text-muted-foreground">
+                  This load has no pickup stop.
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit_load_delivery_date">Delivery Date</Label>
+              <Input
+                id="edit_load_delivery_date"
+                type="date"
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+                disabled={!delivery}
+              />
+              {!delivery && (
+                <p className="text-[11px] text-muted-foreground">
+                  This load has no delivery stop.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2 col-span-2">
+              <Label htmlFor="edit_load_company_name">Company Name</Label>
+              <Input
+                id="edit_load_company_name"
+                placeholder="ACME Logistics"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-2 col-span-2">
+              <Label htmlFor="edit_load_number">Load Number *</Label>
+              <Input
+                id="edit_load_number"
+                value={loadNumber}
+                onChange={(e) => setLoadNumber(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit_load_pickup_city">Pickup City</Label>
+              <Input
+                id="edit_load_pickup_city"
+                value={pickupCity}
+                onChange={(e) => setPickupCity(e.target.value)}
+                disabled={!pickup}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit_load_pickup_state">Pickup State</Label>
+              <Input
+                id="edit_load_pickup_state"
+                value={pickupState}
+                onChange={(e) => setPickupState(e.target.value.toUpperCase())}
+                maxLength={2}
+                disabled={!pickup}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit_load_delivery_city">Delivery City</Label>
+              <Input
+                id="edit_load_delivery_city"
+                value={deliveryCity}
+                onChange={(e) => setDeliveryCity(e.target.value)}
+                disabled={!delivery}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit_load_delivery_state">Delivery State</Label>
+              <Input
+                id="edit_load_delivery_state"
+                value={deliveryState}
+                onChange={(e) =>
+                  setDeliveryState(e.target.value.toUpperCase())
+                }
+                maxLength={2}
+                disabled={!delivery}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Driver</Label>
+              <Select value={driverId} onValueChange={setDriverId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a driver" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={UNASSIGNED_DRIVER}>Unassigned</SelectItem>
+                  {drivers.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.full_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="edit_load_rate">Rate ($) *</Label>
+              <Input
+                id="edit_load_rate"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
+                value={rate}
+                onChange={(e) => setRate(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save Changes
             </Button>
           </DialogFooter>
         </form>
